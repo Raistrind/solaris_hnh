@@ -606,7 +606,7 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 		setcanfocus(true);
 		glob = ui.sess.glob;
 		map = glob.map;
-		mask = new ILM(MainFrame.getScreenSize(), glob.oc);
+		mask = new ILM(MainFrame.getPhysicalInnerSize(), glob.oc);
 		radiuses = new HashMap<String, Integer>();
 		terobjradiuses = new HashMap<String, Integer>();
 		//terobjradiuses.put("");
@@ -1722,7 +1722,7 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 
 			if (curf != null)
 				curf.tick("draw");
-			g.image(mask, Coord.z);
+			g.image(mask, Coord.z, sz);
 			long now = System.currentTimeMillis();
 			RootWidget.names_ready = (RootWidget.screenshot && Config.sshot_nonames);
 			if (!RootWidget.names_ready) {
@@ -1949,6 +1949,12 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 		}
 		hsz = MainFrame.getInnerSize();
 		sz = hsz.mul(1 / getScale());
+		Coord physicalSize = MainFrame.getPhysicalInnerSize();
+		if (!mask.sz().equals(physicalSize)) {
+			mask.dispose();
+			mask = new ILM(physicalSize, glob.oc);
+		}
+		mask.renderScale = Config.getActiveUIScale() * getScale();
 		GOut g = og.reclip(Coord.z, sz);
 		g.gl.glPushMatrix();
 		g.scale(getScale());

@@ -34,6 +34,7 @@ public class Charlist extends Widget {
     public static final int margin = 6;
     public int height, y;
     public Button sau, sad;
+	public IButton logout;
     public List<Char> chars = new ArrayList<Char>();
     public static Charlist instance;
 
@@ -77,7 +78,7 @@ public class Charlist extends Widget {
 		    scroll(1);
 		}
 	    };
-	new IButton(MainFrame.getCenterPoint().add(86, 145), parent, logOut[0], logOut[1]) { public void click() {
+	logout = new IButton(MainFrame.getCenterPoint().add(86, 145), parent, logOut[0], logOut[1]) { public void click() {
 		System.out.println("logged out");
 			ui.sess.close();
 		} };
@@ -95,6 +96,12 @@ public class Charlist extends Widget {
 	    y = 0;
     }
     
+    public void update(long dt) {
+	c = MainFrame.getCenterPoint().add(-380, -50);
+	logout.c = MainFrame.getCenterPoint().add(86, 145);
+	super.update(dt);
+    }
+
     public void draw(GOut g) {
 	int y = 20;
 	synchronized(chars) {

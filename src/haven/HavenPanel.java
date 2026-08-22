@@ -78,7 +78,8 @@ public class HavenPanel extends GLCanvas implements Runnable {
 		super(caps);
 		setSize(this.w = w, this.h = h);
 		initgl();
-		if (Toolkit.getDefaultToolkit().getMaximumCursorColors() >= 256)
+		if ((Config.getActiveUIScale() == 1)
+				&& (Toolkit.getDefaultToolkit().getMaximumCursorColors() >= 256))
 			cursmode = "awt";
 		setCursor(Toolkit.getDefaultToolkit().createCustomCursor(
 				TexI.mkbuf(new Coord(1, 1)), new java.awt.Point(), ""));
@@ -117,6 +118,9 @@ public class HavenPanel extends GLCanvas implements Runnable {
 			}
 
 			public void reshape(GLAutoDrawable d, int x, int y, int w, int h) {
+				HavenPanel.this.w = w;
+				HavenPanel.this.h = h;
+				MainFrame.setPhysicalInnerSize(new Coord(w, h));
 			}
 
 			public void displayChanged(GLAutoDrawable d, boolean cp1,
@@ -127,7 +131,7 @@ public class HavenPanel extends GLCanvas implements Runnable {
 
 	public void init() {
 		setFocusTraversalKeysEnabled(false);
-		ui = new UI(new Coord(w, h), null);
+		ui = new UI(MainFrame.physicalToLogical(new Coord(w, h)), null);
 		addKeyListener(new KeyAdapter() {
 			public void keyTyped(KeyEvent e) {
 				checkfs();
@@ -240,7 +244,7 @@ public class HavenPanel extends GLCanvas implements Runnable {
 	}
 
 	UI newui(Session sess) {
-		ui = new UI(new Coord(w, h), sess);
+		ui = new UI(getLogicalInnerSize(), sess);
 		ui.root.gprof = prof;
 		ui.fsm = this.fsm;
 		return (ui);
@@ -260,25 +264,42 @@ public class HavenPanel extends GLCanvas implements Runnable {
 
 	long last_tick = 0;
 
+	public Coord getPhysicalInnerSize() {
+		return new Coord(getWidth(), getHeight());
+	}
+
+	public Coord getLogicalInnerSize() {
+		return MainFrame.physicalToLogical(getPhysicalInnerSize());
+	}
+
 	void redraw(GL gl) {
-		GOut g = new GOut(gl, getContext(), MainFrame.getInnerSize());
+		Coord physicalSize = getPhysicalInnerSize();
+		if ((physicalSize.x < 1) || (physicalSize.y < 1))
+			return;
+		MainFrame.setPhysicalInnerSize(physicalSize);
+		Coord logicalSize = getLogicalInnerSize();
+		GOut physicalG = new GOut(gl, getContext(), physicalSize);
 		long dt = System.currentTimeMillis() - last_tick;
 		last_tick = System.currentTimeMillis();
 		synchronized (ui) {
+			ui.root.sz = logicalSize;
 			ui.update(dt);
 		}
+		gl.glViewport(0, 0, physicalSize.x, physicalSize.y);
 		gl.glMatrixMode(GL.GL_PROJECTION);
 		gl.glLoadIdentity();
-		gl.glOrtho(0, getWidth(), 0, getHeight(), -1, 1);
-		TexRT.renderall(g);
+		gl.glOrtho(0, physicalSize.x, 0, physicalSize.y, -1, 1);
+		TexRT.renderall(physicalG);
 		if (curf != null)
 			curf.tick("texrt");
 
+		gl.glViewport(0, 0, physicalSize.x, physicalSize.y);
 		gl.glMatrixMode(GL.GL_PROJECTION);
 		gl.glLoadIdentity();
-		gl.glOrtho(0, getWidth(), getHeight(), 0, -1, 1);
+		gl.glOrtho(0, logicalSize.x, logicalSize.y, 0, -1, 1);
 		gl.glClearColor(0, 0, 0, 1);
 		gl.glClear(GL.GL_COLOR_BUFFER_BIT);
+		GOut g = new GOut(gl, getContext(), logicalSize);
 		if (curf != null)
 			curf.tick("cls");
 		synchronized (ui) {
@@ -341,18 +362,18 @@ public class HavenPanel extends GLCanvas implements Runnable {
 			while ((e = events.poll()) != null) {
 				if (e instanceof MouseEvent) {
 					MouseEvent me = (MouseEvent) e;
+					Coord mc = MainFrame.physicalToLogical(new Coord(me.getX(),
+							me.getY()));
 					if (me.getID() == MouseEvent.MOUSE_PRESSED) {
-						ui.mousedown(me, new Coord(me.getX(), me.getY()),
-								me.getButton());
+						ui.mousedown(me, mc, me.getButton());
 					} else if (me.getID() == MouseEvent.MOUSE_RELEASED) {
-						ui.mouseup(me, new Coord(me.getX(), me.getY()),
-								me.getButton());
+						ui.mouseup(me, mc, me.getButton());
 					} else if (me.getID() == MouseEvent.MOUSE_MOVED
 							|| me.getID() == MouseEvent.MOUSE_DRAGGED) {
-						mousepos = new Coord(me.getX(), me.getY());
+						mousepos = mc;
 						ui.mousemove(me, mousepos);
 					} else if (me instanceof MouseWheelEvent) {
-						ui.mousewheel(me, new Coord(me.getX(), me.getY()),
+						ui.mousewheel(me, mc,
 								((MouseWheelEvent) me).getWheelRotation());
 					}
 				} else if (e instanceof KeyEvent) {

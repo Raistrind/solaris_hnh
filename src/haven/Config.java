@@ -81,6 +81,8 @@ public class Config {
 	public static Properties options, window_props;
 	public static int sfxVol;
 	public static int musicVol;
+	public static int uiScale = 1;
+	private static int activeUIScale = 1;
 	public static boolean isMusicOn = false;
 	public static boolean isSoundOn = true;
 	public static boolean showRadius = true;
@@ -186,6 +188,7 @@ public class Config {
 			window_props = new Properties();
 			hideObjectList = Collections.synchronizedSet(new HashSet<String>());
 			loadOptions();
+			activeUIScale = uiScale;
 			loadWindowOptions();
 			loadSmileys();
 			loadFEP();
@@ -384,6 +387,7 @@ public class Config {
 		} catch (IOException e) {
 			System.out.println(e);
 		}
+		uiScale = parseUIScale(options.getProperty("uiScale", "1"));
 		String hideObjects = options.getProperty("hideObjects", "");
 		String hideHighlight = options.getProperty("hcolor", "255,0,0,128");
 		String uiHighlight = options.getProperty("uicolor", "0,0,0,128");
@@ -471,6 +475,27 @@ public class Config {
 		}
 	}
 
+	private static int parseUIScale(String value) {
+		try {
+			return validateUIScale(Integer.parseInt(value));
+		} catch (NumberFormatException e) {
+			return 1;
+		}
+	}
+
+	public static int validateUIScale(int value) {
+		return ((value >= 1) && (value <= 3)) ? value : 1;
+	}
+
+	public static int getActiveUIScale() {
+		return activeUIScale;
+	}
+
+	public static void setUIScale(int value) {
+		uiScale = validateUIScale(value);
+		saveOptions();
+	}
+
 	public static synchronized void setWindowOpt(String key, String value) {
 		synchronized (window_props) {
 			String prev_val = window_props.getProperty(key);
@@ -517,6 +542,8 @@ public class Config {
 
 		options.setProperty("hcolor", scolor);
 		options.setProperty("uicolor", ucolor);
+		uiScale = validateUIScale(uiScale);
+		options.setProperty("uiScale", String.valueOf(uiScale));
 		options.setProperty("hideObjects", hideObjects);
 		options.setProperty("GoogleAPIKey", GoogleTranslator.apikey);
 		options.setProperty("timestamp", (timestamp) ? "true" : "false");

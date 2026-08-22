@@ -1,0 +1,43 @@
+# Ant/Java build output
+/build/
+/classes/
+/release_build/
+/dist/
+*.class
+
+# Solaris runtime configuration and private account data
+/haven.conf
+/windows.conf
+/timers.conf
+/data.bin
+/belts_*.conf
+
+# Runtime copies of the versioned files in etc/needed
+/curio.conf
+/fep.conf
+/haven.ini
+/map.html
+/smileys.conf
+/toolbars.conf
+
+# Generated maps, screenshots, and chat logs
+/map/
+/cave/
+/screenshots/
+/chats/
+
+# Local IDE/editor metadata
+/.idea/
+/.vscode/
+*.iml
+*.ipr
+*.iws
+
+# Operating-system and temporary files
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.log
+*.tmp
+*.new
+hs_err_pid*.log

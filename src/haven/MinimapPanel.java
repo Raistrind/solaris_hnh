@@ -10,6 +10,7 @@ public class MinimapPanel extends Window {
 	public IButton vcl;
 	public IButton pcl;
 	boolean rsm = false;
+	boolean rightAnchored = true;
 	MiniMap mm;
 	IButton btncave;
 
@@ -111,7 +112,11 @@ public class MinimapPanel extends Window {
 
 	private void loadpos(){
 		synchronized (Config.window_props) {
-			c = new Coord(Config.window_props.getProperty("minimap_pos", c.toString()));
+			String savedPosition = Config.window_props.getProperty("minimap_pos");
+			if (savedPosition != null) {
+				c = new Coord(savedPosition);
+				rightAnchored = false;
+			}
 			mm.sz = new Coord(Config.window_props.getProperty("minimap_sz", mm.sz.toString()));
 			pack();
 		}
@@ -119,6 +124,12 @@ public class MinimapPanel extends Window {
 
 	protected void placecbtn() {
 		fbtn.c = new Coord(wsz.x - 3 - Utils.imgsz(cbtni[0]).x, 3).add(mrgn.inv().add(wbox.tloff().inv()));
+	}
+
+	public void update(long dt) {
+		if (rightAnchored)
+			c.x = MainFrame.getInnerSize().x - sz.x;
+		super.update(dt);
 	}
 
 	public void draw(GOut g) {
@@ -142,11 +153,15 @@ public class MinimapPanel extends Window {
 				return true;
 			}
 		}
-		return super.mousedown(c, button);
+		boolean handled = super.mousedown(c, button);
+		if (dm)
+			rightAnchored = false;
+		return handled;
 	}
 
 	public boolean mouseup(Coord c, int button) {
 		if(dm){
+			rightAnchored = false;
 			Config.setWindowOpt("minimap_pos", this.c.toString());
 		}
 		if (rsm){

@@ -35,6 +35,7 @@ public class ILM extends TexRT {
     OCache oc;
     TexI lbtex;
     Color amb;
+	public double renderScale = 1.0;
 	
     static {
 	int sz = 200, min = 50;
@@ -80,6 +81,8 @@ public class ILM extends TexRT {
 	GL gl = g.gl;
 	gl.glClearColor(255, 255, 255, 255);
 	gl.glClear(GL.GL_COLOR_BUFFER_BIT);
+	gl.glPushMatrix();
+	gl.glScaled(renderScale, renderScale, 1.0);
 	synchronized(oc) {
 	    for(Gob gob : oc) {
 		if(gob.sc == null) {
@@ -93,6 +96,7 @@ public class ILM extends TexRT {
 		g.image(lbtex, sc, new Coord(lum.sz * 2, lum.sz * 2));
 	    }
 	}
+	gl.glPopMatrix();
 	return(true);
     }
     

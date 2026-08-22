@@ -43,8 +43,10 @@ public class MainFrame extends Frame implements Runnable, FSMan {
 	ThreadGroup g;
 	DisplayMode fsmode = null, prefs = null;
 	Dimension insetsSize;
+	public static Dimension physicalInnerSize;
 	public static Dimension innerSize;
 	public static Point centerPoint;
+	public static Coord physicalScreenSZ;
 	public static Coord screenSZ;
 	public static MainFrame instance;
 
@@ -88,6 +90,8 @@ public class MainFrame extends Frame implements Runnable, FSMan {
 			setVisible(true);
 			dev.setFullScreenWindow(this);
 			dev.setDisplayMode(fsmode);
+			validate();
+			resetCenter();
 		} catch (Exception e) {
 			throw (new RuntimeException(e));
 		}
@@ -104,6 +108,8 @@ public class MainFrame extends Frame implements Runnable, FSMan {
 			dispose();
 			setUndecorated(false);
 			setVisible(true);
+			validate();
+			resetCenter();
 		} catch (Exception e) {
 			throw (new RuntimeException(e));
 		}
@@ -146,9 +152,12 @@ public class MainFrame extends Frame implements Runnable, FSMan {
 		super("");
 		setTitle(null);
 		instance = this;
-		innerSize = new Dimension(w, h);
+		physicalInnerSize = new Dimension(w, h);
+		Coord logicalSize = physicalToLogical(new Coord(w, h));
+		innerSize = new Dimension(logicalSize.x, logicalSize.y);
 		centerPoint = new Point(innerSize.width / 2, innerSize.height / 2);
-		screenSZ = new Coord(Toolkit.getDefaultToolkit().getScreenSize());
+		physicalScreenSZ = new Coord(Toolkit.getDefaultToolkit().getScreenSize());
+		screenSZ = physicalToLogical(physicalScreenSZ);
 		havenPanel = new HavenPanel(w, h);
 		JSBot.JSInit();
 		fsmode = findmode(w, h);
@@ -168,21 +177,62 @@ public class MainFrame extends Frame implements Runnable, FSMan {
 	}
 
 	public static Coord getScreenSize() {
-		return screenSZ;
+		return new Coord(screenSZ);
+	}
+
+	public static Coord getPhysicalScreenSize() {
+		return new Coord(physicalScreenSZ);
 	}
 	
 	public void resetCenter() {
-		innerSize.setSize(getWidth() - insetsSize.width, getHeight()
-				- insetsSize.height);
-		centerPoint.setLocation(innerSize.width / 2,
-				innerSize.height / 2);
+		Coord physical;
+		if ((havenPanel != null) && (havenPanel.getWidth() > 0)
+				&& (havenPanel.getHeight() > 0)) {
+			physical = havenPanel.getPhysicalInnerSize();
+		} else {
+			Insets insets = getInsets();
+			physical = new Coord(getWidth() - insets.left - insets.right,
+					getHeight() - insets.top - insets.bottom);
+		}
+		setPhysicalInnerSize(physical);
+	}
+
+	public static void setPhysicalInnerSize(Coord physical) {
+		if ((physical.x < 1) || (physical.y < 1))
+			return;
+		if (physicalInnerSize == null)
+			physicalInnerSize = new Dimension();
+		if (innerSize == null)
+			innerSize = new Dimension();
+		if (centerPoint == null)
+			centerPoint = new Point();
+		physicalInnerSize.setSize(physical.x, physical.y);
+		Coord logical = physicalToLogical(physical);
+		innerSize.setSize(logical.x, logical.y);
+		centerPoint.setLocation(logical.x / 2, logical.y / 2);
+	}
+
+	public static Coord getPhysicalInnerSize() {
+		return new Coord(physicalInnerSize);
 	}
 
 	public static Coord getInnerSize() {
-		return new Coord(innerSize.width, innerSize.height);
+		return getLogicalInnerSize();
+	}
+
+	public static Coord getLogicalInnerSize() {
+		return new Coord(innerSize);
+	}
+
+	public static Coord physicalToLogical(Coord physical) {
+		return physical.div(Config.getActiveUIScale());
 	}
 
 	public static Coord getCenterPoint() {
+		return getLogicalCenterPoint();
+	}
+
+	public static Coord getLogicalCenterPoint() {
 		return new Coord(centerPoint.x, centerPoint.y);
 	}
 
@@ -194,10 +244,7 @@ public class MainFrame extends Frame implements Runnable, FSMan {
 		});
 		addComponentListener(new ComponentAdapter() {
 			public void componentResized(ComponentEvent evt) {
-				innerSize.setSize(getWidth() - insetsSize.width, getHeight()
-						- insetsSize.height);
-				centerPoint.setLocation(innerSize.width / 2,
-						innerSize.height / 2);
+				resetCenter();
 			}
 		});
 		Thread ui = new HackThread(havenPanel, "Haven UI thread");

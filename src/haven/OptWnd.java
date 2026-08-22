@@ -237,6 +237,20 @@ public class OptWnd extends Window {
 			}
 		}).a = Config.drawIcons;
 
+	    new Label(new Coord(10, 375), tab, "Display scale (restart required):");
+	    final boolean[] scaleReady = { false };
+	    final RadioGroup displayScale = new RadioGroup(tab) {
+		public void changed(int btn, String lbl) {
+		    if (scaleReady[0])
+			Config.setUIScale(btn + 1);
+		}
+	    };
+	    displayScale.add("1×", new Coord(20, 400));
+	    displayScale.add("2×", new Coord(105, 400));
+	    displayScale.add("3×", new Coord(190, 400));
+	    displayScale.check(Config.uiScale - 1);
+	    scaleReady[0] = true;
+
 	}
 
 	{ /* CAMERA TAB */

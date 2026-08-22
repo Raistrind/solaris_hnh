@@ -131,7 +131,7 @@ public class RootWidget extends ConsoleHost {
 			visible = true;
 			screenshot = false;
 			try {
-				Coord s = MainFrame.getInnerSize();
+				Coord s = MainFrame.getPhysicalInnerSize();
 				String stamp = Utils.sessdate(System.currentTimeMillis());
 				String ext = Config.sshot_compress ? ".jpg" : ".png";
 				File f = new File("screenshots/SS_" + stamp + ext);
