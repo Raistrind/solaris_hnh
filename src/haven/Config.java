@@ -205,41 +205,92 @@ public class Config {
 
 		public CuriosityStat(double blp, float stime, int att) {
 			baseLP = blp;
-			studyTime = (int) (stime * 60);
+			studyTime = Math.round(stime * 60);
 			attention = att;
+		}
+
+		public long effectiveLP(double qualityMultiplier,
+				double learningAbility) {
+			if ((qualityMultiplier <= 0) || (learningAbility <= 0))
+				return 0;
+			return Math.round(baseLP * qualityMultiplier * learningAbility);
+		}
+
+		public double lpPerHour(double qualityMultiplier,
+				double learningAbility) {
+			if (studyTime <= 0)
+				return 0;
+			return (effectiveLP(qualityMultiplier, learningAbility) * 60.0)
+					/ studyTime;
+		}
+
+		public double lpPerAttention(double qualityMultiplier,
+				double learningAbility) {
+			if (attention <= 0)
+				return 0;
+			return effectiveLP(qualityMultiplier, learningAbility)
+					/ (double) attention;
+		}
+
+		public int remainingMinutes(int progress) {
+			int clampedProgress = Math.max(0, Math.min(100, progress));
+			return (int) Math.ceil(studyTime
+					* ((100 - clampedProgress) / 100.0));
 		}
 	}
 
 	private static void loadCurio() {
+		CurioMap.clear();
+		File inputFile = new File("curio.conf");
+		if (!inputFile.exists())
+			inputFile = new File("etc/needed/curio.conf");
+		if (!inputFile.exists())
+			return;
+
+		BufferedReader br = null;
 		try {
-			FileInputStream fstream = new FileInputStream("curio.conf");
-			InputStreamReader in = new InputStreamReader(fstream, "UTF-8");
-			BufferedReader br = new BufferedReader(in);
+			br = new BufferedReader(new InputStreamReader(new FileInputStream(
+					inputFile), "UTF-8"));
 			String strLine;
 			while ((strLine = br.readLine()) != null) {
-				String[] info = strLine.split("=");
+				strLine = strLine.trim();
+				if ((strLine.length() == 0) || strLine.startsWith("#"))
+					continue;
+				String[] info = strLine.split("=", 2);
+				if (info.length != 2)
+					continue;
 				double blp = 0;
 				int att = 0;
 				float stime = 0.0f;
 
-				for (String stat : info[1].split(" ")) {
-					String[] tmp = stat.split(":");
-					if (tmp[0].equals("LP"))
-						blp = (double) Float.valueOf(tmp[1]);
-					else if (tmp[0].equals("AT"))
-						att = Integer.valueOf(tmp[1]);
-					else if (tmp[0].equals("TIME"))
-						stime = Float.valueOf(tmp[1]);
+				for (String stat : info[1].trim().split("\\s+")) {
+					String[] values = stat.split(":", 2);
+					if (values.length != 2)
+						continue;
+					try {
+						if (values[0].equalsIgnoreCase("LP"))
+							blp = Double.valueOf(values[1]);
+						else if (values[0].equalsIgnoreCase("AT"))
+							att = Integer.valueOf(values[1]);
+						else if (values[0].equalsIgnoreCase("TIME"))
+							stime = Float.valueOf(values[1]);
+					} catch (NumberFormatException e) {
+					}
 				}
-				CurioMap.put(info[0], new CuriosityStat(blp, stime, att));
+				String itemName = info[0].trim();
+				if ((itemName.length() > 0) && (blp > 0) && (stime > 0))
+					CurioMap.put(itemName, new CuriosityStat(blp, stime, att));
 			}
-			br.close();
-			in.close();
-			fstream.close();
-		} catch (FileNotFoundException e) {
 		} catch (IOException e) {
+			System.out.println(e);
+		} finally {
+			if (br != null) {
+				try {
+					br.close();
+				} catch (IOException e) {
+				}
+			}
 		}
-
 	}
 
 	private static void loadFEP() {

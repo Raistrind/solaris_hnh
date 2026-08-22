@@ -44,6 +44,8 @@ public class Item extends Widget implements DTarget {
 	static Coord shoff = new Coord(1, 3);
 	static final Pattern patt = Pattern.compile("\\bquality\\s+(\\d+)",
 			Pattern.CASE_INSENSITIVE);
+	static final Pattern qualitySuffix = Pattern.compile(
+			",?\\s*quality\\s+\\d+\\+?.*$", Pattern.CASE_INSENSITIVE);
 	static final Pattern pattVal = Pattern.compile("\\(([0-9.]+)/([0-9.]+)",
 			Pattern.CASE_INSENSITIVE);
 	static Map<Integer, Tex> qmap;
@@ -169,6 +171,7 @@ public class Item extends Widget implements DTarget {
 		}
 		updateQualityMultiplier();
 		invalidateFEP();
+		invalidateCuriosity();
 	}
 
 	private void fixsize() {
@@ -407,6 +410,91 @@ public class Item extends Widget implements DTarget {
 		resettt();
 	}
 
+	private double learningAbility() {
+		if ((ui != null) && (ui.wnd_char != null))
+			return ui.wnd_char.getExpMode();
+		return 1.0;
+	}
+
+	private String curiosityName() {
+		Resource resource = res.get();
+		if (resource != null) {
+			Resource.Tooltip tooltipLayer = resource.layer(Resource.tooltip);
+			if ((tooltipLayer != null) && (tooltipLayer.t != null))
+				return tooltipLayer.t.trim();
+		}
+		if (tooltip == null)
+			return null;
+		return qualitySuffix.matcher(tooltip).replaceFirst("").trim();
+	}
+
+	private static Config.CuriosityStat findCuriosityStat(String itemName) {
+		if (itemName == null)
+			return null;
+		Config.CuriosityStat stat = Config.CurioMap.get(itemName);
+		if (stat != null)
+			return stat;
+		for (Map.Entry<String, Config.CuriosityStat> entry : Config.CurioMap
+				.entrySet()) {
+			if (entry.getKey().equalsIgnoreCase(itemName))
+				return entry.getValue();
+		}
+		return null;
+	}
+
+	private void ensureCuriosityStat() {
+		if (curio_stat == null)
+			curio_stat = findCuriosityStat(curiosityName());
+	}
+
+	Config.CuriosityStat getCuriosityStat() {
+		ensureCuriosityStat();
+		return curio_stat;
+	}
+
+	static String formatCuriosityRate(double value) {
+		return String.format(Locale.US, "%,d", Math.round(value));
+	}
+
+	static String formatCuriosityTip(Config.CuriosityStat stat,
+			double qualityMultiplier, double learningAbility, int progress) {
+		if (stat == null)
+			return null;
+		long lp = stat.effectiveLP(qualityMultiplier, learningAbility);
+		if (lp <= 0)
+			return null;
+		StringBuilder tip = new StringBuilder();
+		tip.append("\nLP: $col[205,205,0]{");
+		tip.append(String.format(Locale.US, "%,d", lp));
+		tip.append("}  Attention: ").append(stat.attention);
+		tip.append("\nStudy: ").append(min2hours(stat.studyTime));
+		if (progress > 0) {
+			tip.append(" (").append(min2hours(stat.remainingMinutes(progress)));
+			tip.append(" left)");
+		}
+		tip.append("\nEfficiency: $col[128,220,128]{");
+		tip.append(formatCuriosityRate(stat.lpPerHour(qualityMultiplier,
+				learningAbility))).append(" LP/h}");
+		tip.append("  ").append(formatCuriosityRate(stat.lpPerAttention(
+				qualityMultiplier, learningAbility))).append(" LP/att");
+		return tip.toString();
+	}
+
+	private void ensureCuriosityTip() {
+		ensureCuriosityStat();
+		String nextTip = formatCuriosityTip(curio_stat, qmult,
+				learningAbility(), meter);
+		if ((curioStr == null) ? (nextTip != null) : !curioStr.equals(nextTip)) {
+			curioStr = nextTip;
+			resettt();
+		}
+	}
+
+	private void invalidateCuriosity() {
+		curioStr = null;
+		resettt();
+	}
+
 	public String shorttip() {
 		if(this.tooltip != null)
 			return(this.tooltip);
@@ -430,6 +518,7 @@ public class Item extends Widget implements DTarget {
 
 	public Object tooltip(Coord c, boolean again) {
 		ensureFEP();
+		ensureCuriosityTip();
 		long now = System.currentTimeMillis();
 		if(!again)
 			hoverstart = now;
@@ -487,6 +576,7 @@ public class Item extends Widget implements DTarget {
 
 	private String shrtTip() {
 		ensureFEP();
+		ensureCuriosityTip();
 		String tt = shorttip();
 		if (tt != null) {
 			tt = RichText.Parser.quote(tt);
@@ -496,15 +586,8 @@ public class Item extends Widget implements DTarget {
 			if (fepTip != null) {
 				tt += fepTip;
 			}
-			if (curio_stat != null && qmult > 0) {
-				if(UI.instance.wnd_char != null)
-					tt += "\nLP: $col[205,205,0]{" + Math.round(curio_stat.baseLP * qmult * UI.instance.wnd_char.getExpMode()) + "}";
-				if (meter > 0) {
-					double time = (double)meter / 100;
-					tt += " in " + min2hours(curio_stat.studyTime - (int)(curio_stat.studyTime * time));
-				}
-				tt += " Att: " + curio_stat.attention;
-			}
+			if (curioStr != null)
+				tt += curioStr;
 		}
 		return tt;
 	}
@@ -533,6 +616,7 @@ public class Item extends Widget implements DTarget {
 		}
 		updateQualityMultiplier();
 		invalidateFEP();
+		invalidateCuriosity();
 	}
 
 	public Config.CuriosityStat curio_stat = null;
@@ -552,9 +636,7 @@ public class Item extends Widget implements DTarget {
 			ui.grabmouse(this);
 			this.c = ui.mc.add(doff.inv());
 		}
-		if (curio_stat == null && name() != null && Config.CurioMap.get(name()) != null) {
-			curio_stat = Config.CurioMap.get(name());
-		}
+		ensureCuriosityStat();
 	}
 
 	public Item(Coord c, int res, int q, Widget parent, Coord drag, int num) {
@@ -610,6 +692,8 @@ public class Item extends Widget implements DTarget {
 	public void chres(Indir<Resource> res, int q) {
 		this.res = res;
 		sh = null;
+		curio_stat = null;
+		invalidateCuriosity();
 		decq(q);
 	}
 
@@ -629,8 +713,7 @@ public class Item extends Widget implements DTarget {
 			resettt();
 		} else if (name == "meter") {
 			meter = (Integer) args[0];
-			shorttip = null;
-			longtip = null;
+			invalidateCuriosity();
 		}
 	}
 
