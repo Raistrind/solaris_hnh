@@ -497,6 +497,14 @@ public class APXUtils {
 				"Stop Scripts Individually", 'M', resScript1,
 				scriptRoot, null);
 
+		addResource("world_map", "World Map", "Open persistent world map", 'W',
+				resScript2, unionRoot, new MenuElemetUseListener(null) {
+					public void use(int button) {
+						if (button == 1)
+							WorldMapWindow.toggle(UI.instance);
+					}
+				});
+
 		addResource("toggle_draw_pf_map", "Toggle PF Map", "Shows some shit...", 'T',
 				resScript2, unionRoot,
 				new MenuElemetUseListener(null) {

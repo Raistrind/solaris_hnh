@@ -682,15 +682,36 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 		}
 	}
 
-	static String cropDisplayName(String resourceName) {
-		if (resourceName == null)
-			return null;
-		String prefix = "gfx/terobjs/plants/";
-		if (!resourceName.startsWith(prefix))
-			return null;
-		String baseName = resourceName.substring(prefix.length());
-		if (baseName.equals("wine"))
-			return "Grapevine";
+	public static class FlowerMenuTargetInfo {
+		public final String name;
+		public final CropInfo crop;
+
+		public FlowerMenuTargetInfo(String name, CropInfo crop) {
+			this.name = name;
+			this.crop = crop;
+		}
+	}
+
+	static String flowerMenuOptionLabel(String option,
+			FlowerMenuTargetInfo target) {
+		if (target == null)
+			return option;
+		if (option.equalsIgnoreCase("Pick"))
+			return "Pick - " + target.name;
+		CropInfo crop = target.crop;
+		if ((crop == null) || !option.equalsIgnoreCase("Harvest"))
+			return option;
+		StringBuilder label = new StringBuilder("Harvest - ");
+		label.append(crop.name);
+		if ((crop.stage >= 0) && (crop.stages > 1)
+				&& (crop.stage < crop.stages)) {
+			label.append(" (Stage ").append(crop.stage + 1);
+			label.append('/').append(crop.stages).append(')');
+		}
+		return label.toString();
+	}
+
+	private static String displayBaseName(String baseName) {
 		String[] words = baseName.split("[-_]");
 		StringBuilder name = new StringBuilder();
 		for (String word : words) {
@@ -701,7 +722,35 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 			name.append(word.substring(0, 1).toUpperCase(Locale.ENGLISH));
 			name.append(word.substring(1));
 		}
-		return (name.length() > 0) ? name.toString() : "Crop";
+		return (name.length() > 0) ? name.toString() : "Object";
+	}
+
+	static String cropDisplayName(String resourceName) {
+		if (resourceName == null)
+			return null;
+		String prefix = "gfx/terobjs/plants/";
+		if (!resourceName.startsWith(prefix))
+			return null;
+		String baseName = resourceName.substring(prefix.length());
+		if (baseName.length() == 0)
+			return "Crop";
+		if (baseName.equals("wine"))
+			return "Grapevine";
+		return displayBaseName(baseName);
+	}
+
+	static String targetDisplayName(String resourceName, String tooltip) {
+		if ((tooltip != null) && (tooltip.trim().length() > 0))
+			return tooltip.trim();
+		String cropName = cropDisplayName(resourceName);
+		if (cropName != null)
+			return cropName;
+		if (resourceName == null)
+			return null;
+		int separator = resourceName.lastIndexOf('/');
+		String baseName = (separator < 0) ? resourceName : resourceName
+				.substring(separator + 1);
+		return displayBaseName(baseName);
 	}
 
 	private CropInfo cropInfo(Gob gob) {
@@ -732,12 +781,25 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 		return new CropInfo(cropName, stage, stages);
 	}
 
+	private FlowerMenuTargetInfo flowerMenuTargetInfo(Gob gob) {
+		if (gob == null)
+			return null;
+		Resource resource = gob.getres();
+		if (resource == null)
+			return null;
+		CropInfo crop = cropInfo(gob);
+		Resource.Tooltip tooltip = resource.layer(Resource.tooltip);
+		String tooltipText = (tooltip == null) ? null : tooltip.t;
+		String name = targetDisplayName(resource.name, tooltipText);
+		return (name == null) ? null : new FlowerMenuTargetInfo(name, crop);
+	}
+
 	private void rememberFlowerMenuTarget(Gob target) {
 		flowerMenuTarget = target;
 		flowerMenuTargetTime = System.currentTimeMillis();
 	}
 
-	public CropInfo consumeFlowerMenuCropInfo() {
+	public FlowerMenuTargetInfo consumeFlowerMenuTargetInfo() {
 		Gob target = flowerMenuTarget;
 		long targetTime = flowerMenuTargetTime;
 		flowerMenuTarget = null;
@@ -745,7 +807,12 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 		if ((target == null)
 				|| ((System.currentTimeMillis() - targetTime) > 10000))
 			return null;
-		return cropInfo(target);
+		return flowerMenuTargetInfo(target);
+	}
+
+	public CropInfo consumeFlowerMenuCropInfo() {
+		FlowerMenuTargetInfo target = consumeFlowerMenuTargetInfo();
+		return (target == null) ? null : target.crop;
 	}
 
 	public boolean mousedown(Coord c, int button) {

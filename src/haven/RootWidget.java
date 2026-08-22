@@ -94,6 +94,8 @@ public class RootWidget extends ConsoleHost {
 				ui.speedget.setspeed(3, true);
 			} else if ((code == KeyEvent.VK_F9) && ui.modshift) {
 					KerriUtils.clearOL();
+			} else if ((code == KeyEvent.VK_M) && ctrl && ev.isShiftDown()) {
+				WorldMapWindow.toggle(ui);
 			} else if ((code == KeyEvent.VK_M) && ctrl) {
 				ui.minimappanel.fbtn.click();
 			} else if ((code == KeyEvent.VK_L) && alt) {

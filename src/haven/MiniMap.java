@@ -70,6 +70,7 @@ public class MiniMap extends Widget {
 	boolean hidden = false, grid = false;;
 	MapView mv;
 	boolean dm = false;
+	private final boolean primary;
 	public int scale = 4;
 	double scales[] = { 0.5, 0.66, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2 };
 
@@ -218,6 +219,7 @@ public class MiniMap extends Widget {
 			currentSessionFile.write("var currentSession = '" + date + "';\n");
 			currentSessionFile.close();}
 			mappingSession = newSession;
+			mappingStartPoint = null;
 			gridsHashes.clear();
 			coordHashes.clear();
 		} catch (IOException ex) {
@@ -225,15 +227,25 @@ public class MiniMap extends Widget {
 	}
 
 	public MiniMap(Coord c, Coord sz, Widget parent, MapView mv) {
+		this(c, sz, parent, mv, true);
+	}
+
+	protected MiniMap(Coord c, Coord sz, Widget parent, MapView mv,
+			boolean primary) {
 		super(c, sz, parent);
 		this.mv = mv;
+		this.primary = primary;
 		off = new Coord();
-		newMappingSession();
-		ui.minimap = this;
+		if (primary) {
+			newMappingSession();
+			ui.minimap = this;
+		}
 	}
 	
 	public void unlink(){
-		ui.minimap = null;
+		if (primary && (ui.minimap == this))
+			ui.minimap = null;
+		super.unlink();
 	}
 
 	public static Tex getgrid(final String nm) {
@@ -259,6 +271,24 @@ public class MiniMap extends Widget {
 		}
 	}
 	
+	protected Coord viewCenter() {
+		return mv.mc.div(tileSize).add(off.div(getScale()));
+	}
+
+	protected Coord localToTile(Coord lc) {
+		Coord hsz = sz.div(getScale());
+		return viewCenter().add(lc.div(getScale())).sub(hsz.div(2));
+	}
+
+	protected Coord tileToLocal(Coord tc) {
+		Coord hsz = sz.div(getScale());
+		return tc.sub(viewCenter()).add(hsz.div(2)).mul(getScale());
+	}
+
+	public void centerOnTile(Coord tc) {
+		off = tc.sub(mv.mc.div(tileSize)).mul(getScale());
+	}
+
 	private Coord localToReal(Coord lc) {
 		Gob pl = ui.sess.glob.oc.getgob(mv.playergob);
 		if (pl == null) return Coord.z;
@@ -270,7 +300,7 @@ public class MiniMap extends Widget {
 		double scale = getScale();
 		Coord hsz = sz.div(scale);
 
-		Coord tc = mv.mc.div(tileSize).add(off.div(scale));
+		Coord tc = viewCenter();
 		Coord ulg = tc.div(cmaps);
 		while ((ulg.x * cmaps.x) - tc.x + (hsz.x / 2) > 0)
 			ulg.x--;
@@ -302,7 +332,7 @@ public class MiniMap extends Widget {
 					synchronized (ui.sess.glob.map.req) {
 						synchronized (ui.sess.glob.map.grids) {
 							grid = ui.sess.glob.map.grids.get(cg);
-							if (grid == null)
+							if ((grid == null) && primary)
 								ui.sess.glob.map.request(cg);
 						}
 					}
@@ -411,8 +441,12 @@ public class MiniMap extends Widget {
 				KerriUtils.drawPlayersAtMinimap(g, tc, hsz);
 			}
 		}
+		drawMapOverlay(g, tc, hsz);
 		g.gl.glPopMatrix();
 		super.draw(og);
+	}
+
+	protected void drawMapOverlay(GOut g, Coord tc, Coord hsz) {
 	}
 
 	public boolean isCave() {

@@ -197,26 +197,24 @@ public class FlowerMenu extends Widget {
 	}
 
 	static String cropOptionLabel(String option, MapView.CropInfo crop) {
-		if ((crop == null) || !option.equalsIgnoreCase("Harvest"))
-			return option;
-		StringBuilder label = new StringBuilder("Harvest - ");
-		label.append(crop.name);
-		if ((crop.stage >= 0) && (crop.stages > 1)
-				&& (crop.stage < crop.stages)) {
-			label.append(" (Stage ").append(crop.stage + 1);
-			label.append('/').append(crop.stages).append(')');
-		}
-		return label.toString();
+		MapView.FlowerMenuTargetInfo target = (crop == null) ? null
+				: new MapView.FlowerMenuTargetInfo(crop.name, crop);
+		return MapView.flowerMenuOptionLabel(option, target);
+	}
+
+	static String targetOptionLabel(String option,
+			MapView.FlowerMenuTargetInfo target) {
+		return MapView.flowerMenuOptionLabel(option, target);
 	}
 
 	public FlowerMenu(Coord c, Widget parent, String... options) {
 		super(c, Coord.z, parent);
-		MapView.CropInfo crop = (ui.mapview == null) ? null
-				: ui.mapview.consumeFlowerMenuCropInfo();
+		MapView.FlowerMenuTargetInfo target = (ui.mapview == null) ? null
+				: ui.mapview.consumeFlowerMenuTargetInfo();
 		menuOptions = new Petal[options.length];
 		for (int i = 0; i < options.length; i++) {
-			menuOptions[i] = new Petal(options[i], cropOptionLabel(options[i],
-					crop));
+			menuOptions[i] = new Petal(options[i], targetOptionLabel(options[i],
+					target));
 			menuOptions[i].num = i;
 		}
 		organize(menuOptions);
