@@ -281,6 +281,14 @@ public class Item extends Widget implements DTarget {
 				drawBar(g, 10, clr, 10);
 			}
 		}
+		if (Config.showInventoryCategories && !isDragging && (res.get() != null)) {
+			if (knowledgeCategoryColor == null)
+				knowledgeCategoryColor = KnowledgeBase.categoryColor(
+						KnowledgeBase.displayName(res.get()), res.get().name);
+			g.chcolor(knowledgeCategoryColor);
+			g.rect(Coord.z, sz.sub(1, 1));
+			g.chcolor();
+		}
 	}
 
 	static Tex getqtex(int q){
@@ -326,6 +334,8 @@ public class Item extends Widget implements DTarget {
 			"CON", "PER", "CHA", "DEX", "PSY", "HHP", "HUNGER" };
 	private String fepTip = null;
 	private boolean fepDirty = true;
+	private int knowledgeMode = -1;
+	private Color knowledgeCategoryColor = null;
 
 	static double qualityMultiplier(int quality) {
 		return (quality > 0) ? Math.sqrt((double) quality / 10.0) : 0.0;
@@ -517,6 +527,12 @@ public class Item extends Widget implements DTarget {
 	Text shorttip = null, longtip = null;
 
 	public Object tooltip(Coord c, boolean again) {
+		int nextKnowledgeMode = Config.showItemContext ? KnowledgeBase
+				.detailMode(ui) : 0;
+		if (nextKnowledgeMode != knowledgeMode) {
+			knowledgeMode = nextKnowledgeMode;
+			resettt();
+		}
 		ensureFEP();
 		ensureCuriosityTip();
 		long now = System.currentTimeMillis();
@@ -538,7 +554,10 @@ public class Item extends Widget implements DTarget {
 					if(curioStr != null){
 						tt += curioStr;
 					}
-					shorttip = RichText.render(tt, 200);
+					String context = KnowledgeBase.itemTooltip(this, knowledgeMode);
+					if (context != null)
+						tt += context;
+					shorttip = RichText.render(tt, (knowledgeMode > 0) ? 320 : 200);
 				}
 			}
 			return(shorttip);
@@ -557,9 +576,12 @@ public class Item extends Widget implements DTarget {
 				if(curioStr != null){
 					tt += curioStr;
 				}
+				String context = KnowledgeBase.itemTooltip(this, knowledgeMode);
+				if (context != null)
+					tt += context;
 				if(pg != null)
 					tt += "\n\n" + pg.text;
-				longtip = RichText.render(tt, 200);
+				longtip = RichText.render(tt, (knowledgeMode > 0) ? 320 : 200);
 			}
 			return(longtip);
 		}
@@ -588,6 +610,9 @@ public class Item extends Widget implements DTarget {
 			}
 			if (curioStr != null)
 				tt += curioStr;
+			String context = KnowledgeBase.itemTooltip(this, knowledgeMode);
+			if (context != null)
+				tt += context;
 		}
 		return tt;
 	}
@@ -692,6 +717,7 @@ public class Item extends Widget implements DTarget {
 	public void chres(Indir<Resource> res, int q) {
 		this.res = res;
 		sh = null;
+		knowledgeCategoryColor = null;
 		curio_stat = null;
 		invalidateCuriosity();
 		decq(q);
@@ -719,7 +745,17 @@ public class Item extends Widget implements DTarget {
 
 	public boolean mousedown(Coord c, int button) {
 		if (!isDragging) {
-			if (button == 1) {
+			if ((button == 2) && Config.showItemContext) {
+				Resource resource = res.get();
+				String resourceName = (resource == null) ? GetResName()
+						: resource.name;
+				String displayName = (resource == null) ? name()
+						: KnowledgeBase.displayName(resource);
+				if ((displayName == null) || (displayName.trim().length() == 0))
+					displayName = KnowledgeBase.humanize(resourceName);
+				KnowledgeWindow.openForItem(ui, displayName, resourceName);
+				return true;
+			} else if (button == 1) {
 				if (ui.modshift)
 					wdgmsg("transfer", c);
 				else if (ui.modctrl)

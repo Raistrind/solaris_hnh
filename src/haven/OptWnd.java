@@ -65,10 +65,10 @@ public class OptWnd extends Window {
 	}
     }
 
-    public OptWnd(Coord c, Widget parent) {
-	super(c, new Coord(440, 540), parent, "Options");
+	public OptWnd(Coord c, Widget parent) {
+	super(c, new Coord(550, 540), parent, "Options");
 
-	body = new Tabs(Coord.z, new Coord(400, 540), this) {
+	body = new Tabs(Coord.z, new Coord(520, 540), this) {
 	    public void changed(Tab from, Tab to) {
 		Utils.setpref("optwndtab", to.btn.text.text);
 		from.btn.c.y = 0;
@@ -625,6 +625,80 @@ public class OptWnd extends Window {
 			final RichTextBox helpinfo3 = new RichTextBox(new Coord(5, 210), new Coord(400, 160), tab, "(this client is a fork from the original Union Client source)", foundry12);
 			helpinfo3.bg = new java.awt.Color(0, 0, 0, 0);
 
+		}
+
+		{ /* HELP AND ONBOARDING TAB */
+			tab = body.new Tab(new Coord(440, 0), 65, "Help");
+			new Label(new Coord(10, 30), tab, "Explanation detail:");
+			final boolean[] explanationReady = { false };
+			final RadioGroup explanation = new RadioGroup(tab) {
+				public void changed(int btn, String lbl) {
+					if (explanationReady[0]) {
+						Config.explanationLevel = Config
+								.validateExplanationLevel(btn);
+						Config.saveOptions();
+					}
+				}
+			};
+			explanation.add("Minimal", new Coord(20, 55));
+			explanation.add("Beginner", new Coord(120, 55));
+			explanation.add("Detailed", new Coord(230, 55));
+			explanation.check(Config.explanationLevel);
+			explanationReady[0] = true;
+
+			(new CheckBox(new Coord(10, 95), tab, "Expanded world-object tooltips") {
+				public void changed(boolean val) {
+					Config.showObjectContext = val;
+					Config.saveOptions();
+				}
+			}).a = Config.showObjectContext;
+			(new CheckBox(new Coord(10, 125), tab, "Item uses, sources and requirements") {
+				public void changed(boolean val) {
+					Config.showItemContext = val;
+					Config.saveOptions();
+				}
+			}).a = Config.showItemContext;
+			(new CheckBox(new Coord(10, 155), tab, "Equipment comparison") {
+				public void changed(boolean val) {
+					Config.showEquipmentComparison = val;
+					Config.saveOptions();
+				}
+			}).a = Config.showEquipmentComparison;
+			(new CheckBox(new Coord(10, 185), tab, "Clickable terminology and stat links") {
+				public void changed(boolean val) {
+					Config.showTerminologyLinks = val;
+					Config.saveOptions();
+				}
+			}).a = Config.showTerminologyLinks;
+			(new CheckBox(new Coord(10, 215), tab, "Inventory category borders") {
+				public void changed(boolean val) {
+					Config.showInventoryCategories = val;
+					Config.saveOptions();
+				}
+			}).a = Config.showInventoryCategories;
+			(new CheckBox(new Coord(10, 245), tab, "Map breadcrumb trail") {
+				public void changed(boolean val) {
+					Config.showBreadcrumbTrail = val;
+					Config.saveOptions();
+				}
+			}).a = Config.showBreadcrumbTrail;
+			(new CheckBox(new Coord(10, 275), tab, "Hotkey overlay (Ctrl+Shift+F1)") {
+				public void changed(boolean val) {
+					Config.showHotkeyOverlay = val;
+					if (!val)
+						HotkeyOverlay.hide();
+					Config.saveOptions();
+				}
+			}).a = Config.showHotkeyOverlay;
+
+			new RichTextBox(new Coord(10, 315), new Coord(485, 95), tab,
+					"Hold $b{Shift} while hovering for the detailed level without changing this setting. Middle-click an inventory item for reverse recipe search. The recipe index stays local and learns exact ingredients when crafting windows are opened.",
+					foundry12).bg = new Color(0, 0, 0, 100);
+			new Button(new Coord(150, 430), 180, tab, "Open Offline Handbook") {
+				public void click() {
+					KnowledgeWindow.open(ui, "home");
+				}
+			};
 		}
 
 	new Frame(new Coord(0, 0), new Coord(0, 0), this);

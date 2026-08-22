@@ -36,6 +36,7 @@ public class Makewindow extends HWindow {
 	Widget obtn, cbtn;
 	List<Widget> inputs;
 	List<Widget> outputs;
+	private boolean recipeCaptured = false;
 	static Coord boff = new Coord(7, 9);
 	public static final Text.Foundry nmf = new Text.Foundry(new Font("Serif",
 			Font.PLAIN, 20));
@@ -61,6 +62,16 @@ public class Makewindow extends HWindow {
 		rLabel.setcolor(Color.black); //Kerri
 		obtn = new Button(new Coord(290, 71), 60, this, "Craft");
 		cbtn = new Button(new Coord(360, 71), 60, this, "Craft All");
+		if (Config.showItemContext && (Config.explanationLevel > 0)) {
+			setsz(new Coord(430, 145));
+			if (Config.showTerminologyLinks)
+				new KnowledgeLink(new Coord(10, 105), this, "Quality help",
+						"term-quality", KnowledgeBase.craftingQualityText());
+			else
+				new Label(new Coord(10, 105), this, "Quality:");
+			new Label(new Coord(90, 102), this, KnowledgeBase
+					.craftingQualityText(), 325);
+		}
 	}
 	
 	@Override
@@ -72,6 +83,7 @@ public class Makewindow extends HWindow {
 	public void uimsg(String msg, Object... args) {
 		if (msg == "pop") {
 			is_ready = true;
+			recipeCaptured = false;
 			final int xoff = 50;
 			if (inputs != null) {
 				for (Widget w : inputs)
@@ -99,6 +111,37 @@ public class Makewindow extends HWindow {
 						(Integer) args[i + 1]);
 			}
 		}
+	}
+
+	private List<KnowledgeBase.Ingredient> recipeItems(List<Widget> boxes) {
+		if (boxes == null)
+			return null;
+		List<KnowledgeBase.Ingredient> ingredients = new ArrayList<KnowledgeBase.Ingredient>();
+		for (Widget box : boxes) {
+			for (Widget child = box.child; child != null; child = child.next) {
+				if (!(child instanceof Item))
+					continue;
+				KnowledgeBase.Ingredient ingredient = KnowledgeBase
+						.ingredient((Item) child);
+				if (ingredient == null)
+					return null;
+				ingredients.add(ingredient);
+			}
+		}
+		return ingredients;
+	}
+
+	public void update(long dt) {
+		if (!recipeCaptured && is_ready) {
+			List<KnowledgeBase.Ingredient> recipeInputs = recipeItems(inputs);
+			List<KnowledgeBase.Ingredient> recipeOutputs = recipeItems(outputs);
+			if ((recipeInputs != null) && (recipeOutputs != null)
+					&& !recipeOutputs.isEmpty()) {
+				KnowledgeBase.recordRecipe(craft_name, recipeInputs, recipeOutputs);
+				recipeCaptured = true;
+			}
+		}
+		super.update(dt);
 	}
 
 	public void wdgmsg(Widget sender, String msg, Object... args) {

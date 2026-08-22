@@ -123,6 +123,14 @@ public class Config {
 	public static boolean hideVand;
 	public static boolean hideMurd;
 	public static boolean flaskMeters = true;
+	public static int explanationLevel = 1;
+	public static boolean showObjectContext = true;
+	public static boolean showItemContext = true;
+	public static boolean showEquipmentComparison = true;
+	public static boolean showTerminologyLinks = true;
+	public static boolean showInventoryCategories = true;
+	public static boolean showBreadcrumbTrail = true;
+	public static boolean showHotkeyOverlay = true;
 
 	public static boolean assign_to_tile = false;
 
@@ -462,6 +470,8 @@ public class Config {
 			System.out.println(e);
 		}
 		uiScale = parseUIScale(options.getProperty("uiScale", "1"));
+		explanationLevel = parseExplanationLevel(options.getProperty(
+				"explanationLevel", "1"));
 		String hideObjects = options.getProperty("hideObjects", "");
 		String hideHighlight = options.getProperty("hcolor", "255,0,0,128");
 		String uiHighlight = options.getProperty("uicolor", "0,0,0,128");
@@ -510,6 +520,20 @@ public class Config {
 		tileAA = options.getProperty("tileAA", "false").equals("true");
 		drawIcons = options.getProperty("drawIcons", "false").equals("true");
 		flaskMeters = options.getProperty("flaskMeters", "false").equals("true");
+		showObjectContext = options.getProperty("showObjectContext", "true")
+				.equals("true");
+		showItemContext = options.getProperty("showItemContext", "true").equals(
+				"true");
+		showEquipmentComparison = options.getProperty("showEquipmentComparison",
+				"true").equals("true");
+		showTerminologyLinks = options.getProperty("showTerminologyLinks", "true")
+				.equals("true");
+		showInventoryCategories = options.getProperty("showInventoryCategories",
+				"true").equals("true");
+		showBreadcrumbTrail = options.getProperty("showBreadcrumbTrail", "true")
+				.equals("true");
+		showHotkeyOverlay = options.getProperty("showHotkeyOverlay", "true")
+				.equals("true");
 		hideTressp = options.getProperty("hideTressp", "false").equals("true");
 		hideTheft = options.getProperty("hideTheft", "false").equals("true");
 		hideAsslt = options.getProperty("hideAsslt", "false").equals("true");
@@ -557,8 +581,20 @@ public class Config {
 		}
 	}
 
+	private static int parseExplanationLevel(String value) {
+		try {
+			return validateExplanationLevel(Integer.parseInt(value));
+		} catch (NumberFormatException e) {
+			return 1;
+		}
+	}
+
 	public static int validateUIScale(int value) {
 		return ((value >= 1) && (value <= 3)) ? value : 1;
+	}
+
+	public static int validateExplanationLevel(int value) {
+		return Math.max(0, Math.min(2, value));
 	}
 
 	public static int getActiveUIScale() {
@@ -618,6 +654,8 @@ public class Config {
 		options.setProperty("uicolor", ucolor);
 		uiScale = validateUIScale(uiScale);
 		options.setProperty("uiScale", String.valueOf(uiScale));
+		explanationLevel = validateExplanationLevel(explanationLevel);
+		options.setProperty("explanationLevel", String.valueOf(explanationLevel));
 		options.setProperty("hideObjects", hideObjects);
 		options.setProperty("GoogleAPIKey", GoogleTranslator.apikey);
 		options.setProperty("timestamp", (timestamp) ? "true" : "false");
@@ -656,6 +694,19 @@ public class Config {
 		options.setProperty("showFlavors", showFlavors ? "true" : "false");
 		options.setProperty("showpathAll", showpathAll ? "true" : "false");
 		options.setProperty("flaskMeters", flaskMeters ? "true":"false");
+		options.setProperty("showObjectContext", showObjectContext ? "true"
+				: "false");
+		options.setProperty("showItemContext", showItemContext ? "true" : "false");
+		options.setProperty("showEquipmentComparison", showEquipmentComparison
+				? "true" : "false");
+		options.setProperty("showTerminologyLinks", showTerminologyLinks ? "true"
+				: "false");
+		options.setProperty("showInventoryCategories", showInventoryCategories
+				? "true" : "false");
+		options.setProperty("showBreadcrumbTrail", showBreadcrumbTrail ? "true"
+				: "false");
+		options.setProperty("showHotkeyOverlay", showHotkeyOverlay ? "true"
+				: "false");
 		options.setProperty("hideTressp", hideTressp ? "true" : "false");
 		options.setProperty("hideTheft", hideTheft ? "true" : "false");
 		options.setProperty("hideAsslt", hideAsslt ? "true" : "false");

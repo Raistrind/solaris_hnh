@@ -843,17 +843,29 @@ public class CharWnd extends Window {
 			wdgmsg("buy", nsk.skills.get(nsk.sel).basename());
 	}
 
+	private Label contextualLabel(Coord c, Widget parent, String text,
+			String documentId, String explanation) {
+		if (Config.showTerminologyLinks && (Config.explanationLevel > 0))
+			return new KnowledgeLink(c, parent, text, documentId, explanation);
+		Label label = new Label(c, parent, text);
+		if (Config.explanationLevel > 0)
+			label.tooltip = explanation;
+		return label;
+	}
+
 	private void baseval(int y, String id, String nm) {
 		new Img(new Coord(10, y), Resource.loadtex("gfx/hud/charsh/" + id),
 				cattr);
-		new Label(new Coord(30, y), cattr, nm + ":");
+		contextualLabel(new Coord(30, y), cattr, nm + ":", KnowledgeBase
+				.statDocument(id), KnowledgeBase.statTooltip(id));
 		new NAttr(id, 100, y);
 	}
 
 	private void skillval(int y, String id, String nm) {
 		new Img(new Coord(210, y), Resource.loadtex("gfx/hud/charsh/" + id),
 				cattr);
-		new Label(new Coord(230, y), cattr, nm + ":");
+		contextualLabel(new Coord(230, y), cattr, nm + ":", KnowledgeBase
+				.statDocument(id), KnowledgeBase.statTooltip(id));
 		new SAttr(id, 320, y);
 	}
 
@@ -868,7 +880,9 @@ public class CharWnd extends Window {
 		}
 
 		// Name
-		new Label(new Coord(x += 15, y), cattr, nm + ":");
+		String id = nm.toLowerCase(Locale.ENGLISH).replace(" ", "");
+		contextualLabel(new Coord(x += 15, y), cattr, nm + ":", KnowledgeBase
+				.statDocument(id), KnowledgeBase.statTooltip(id));
 
 		return new SCapVal(x, y, as, sqrt);
 	}
@@ -878,7 +892,8 @@ public class CharWnd extends Window {
 		ui.wnd_char = this;
 		int y;
 		cattr = new Widget(Coord.z, new Coord(400, 300), this);
-		new Label(new Coord(10, 10), cattr, "Base Attributes:");
+		contextualLabel(new Coord(10, 10), cattr, "Base Attributes:",
+				"term-attributes", "Food raises base attributes; equipment and effects can modify current values.");
 		y = 25;
 		baseval(y += 15, "str", "Strength");
 		baseval(y += 15, "agil", "Agility");
@@ -895,7 +910,9 @@ public class CharWnd extends Window {
 		cost = new Label(new Coord(300, expbase), cattr, "0");
 		new Label(new Coord(210, expbase + 15), cattr, "Learning Points:");
 		explbl = new Label(new Coord(300, expbase + 15), cattr, "0");
-		new Label(new Coord(210, expbase + 30), cattr, "Learning Ability:");
+		contextualLabel(new Coord(210, expbase + 30), cattr,
+				"Learning Ability:", "term-learning",
+				"A percentage multiplier applied to Learning Point rewards.");
 		expattr = new NAttr("expmod", 300, expbase + 30) {
 			public void update() {
 				lbl.settext(String.format("%d%%", attr.comp));
@@ -924,7 +941,8 @@ public class CharWnd extends Window {
 		};
 
 		y = 25;
-		new Label(new Coord(210, 10), cattr, "Skill Values:");
+		contextualLabel(new Coord(210, 10), cattr, "Skill Values:",
+				"term-skills", "Trainable values bought with Learning Points and used by crafting, gathering and combat checks.");
 		skillval(y += 15, "unarmed", "Unarmed Combat");
 		skillval(y += 15, "melee", "Melee Combat");
 		skillval(y += 15, "ranged", "Marksmanship");

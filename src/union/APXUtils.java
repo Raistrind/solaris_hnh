@@ -505,6 +505,14 @@ public class APXUtils {
 					}
 				});
 
+		addResource("offline_handbook", "Handbook", "Open offline help and recipes",
+				'B', resScript2, unionRoot, new MenuElemetUseListener(null) {
+					public void use(int button) {
+						if (button == 1)
+							KnowledgeWindow.toggle(UI.instance);
+					}
+				});
+
 		addResource("toggle_draw_pf_map", "Toggle PF Map", "Shows some shit...", 'T',
 				resScript2, unionRoot,
 				new MenuElemetUseListener(null) {

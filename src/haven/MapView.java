@@ -616,6 +616,7 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 		//terobjradiuses.put("");
 		radiuses.put("gfx/terobjs/mining/minesupport", 100);
 		radiuses.put("gfx/terobjs/bhive", 150);
+		BreadcrumbTrail.reset();
 
 	}
 
@@ -947,38 +948,17 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 		if(objectUnderMouse == null) {
 			tip = null;
 			tips = null;
-		} else if(objectUnderMouse != null && ui.modshift){
-			String s;
-			s = "Res found on gob " + objectUnderMouse.id;
-			String names[] = objectUnderMouse.resnames();
-			if(names.length > 0){
-				for(String name : names){
-					if(name.contains("gfx/borka")){
-						name = name.replace("gfx/borka/","");
-						if(name.contains("/"))
-							name = name.substring(0,name.indexOf("/"));
-						if(name.equals("body") || name.startsWith("hair") || s.contains(name))
-							continue;
-					}
-					s += "\n"+name;
-				}
-			}
-
-			if(tip == null || !tips.equals(s)){
-				tips = s;
-				tip = null;
-				tooltip(null,false);
-			}
-		} 
+		}
 	}
 	
 	String tips;
 	Text tip = null;
 	public Object tooltip(Coord c,boolean again){
-		if(tip != null)
-			return(tip);
-		if(tips != null && !tips.equals("")){
-			tip = RichText.render(tips,200);
+		int mode = Config.showObjectContext ? KnowledgeBase.detailMode(ui) : 0;
+		String next = KnowledgeBase.objectTooltip(objectUnderMouse, mode);
+		if ((tips == null) ? (next != null) : !tips.equals(next)) {
+			tips = next;
+			tip = (next == null) ? null : RichText.render(next, 320);
 		}
 		return(tip);
 	}
@@ -2032,6 +2012,7 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 				}
 		}
 		myLastCoord = myCurrentCoord;
+		BreadcrumbTrail.record(myCurrentCoord);
 		
 		update_pf_moving();
 	}

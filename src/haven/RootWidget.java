@@ -52,8 +52,20 @@ public class RootWidget extends ConsoleHost {
 	}
 
 	public boolean globtype(char key, KeyEvent ev) {
+		int globalCode = ev.getKeyCode();
+		if ((globalCode == KeyEvent.VK_F1) && ev.isControlDown()
+				&& ev.isShiftDown()) {
+			HotkeyOverlay.toggle();
+			return true;
+		} else if ((globalCode == KeyEvent.VK_F1) && ev.isControlDown()) {
+			KnowledgeWindow.openContext(ui);
+			return true;
+		} else if ((globalCode == KeyEvent.VK_ESCAPE) && HotkeyOverlay.visible()) {
+			HotkeyOverlay.hide();
+			return true;
+		}
 		if (!super.globtype(key, ev)) {
-			int code = ev.getKeyCode();
+			int code = globalCode;
 			boolean ctrl = ev.isControlDown();
 			boolean alt = ev.isAltDown();
 			if (Config.profile && (key == '`')) {
@@ -129,6 +141,7 @@ public class RootWidget extends ConsoleHost {
 		}
 		super.draw(g);
 		drawcmd(g, new Coord(20, 580));
+		HotkeyOverlay.draw(g, sz);
 		if (screenshot && (!Config.sshot_nonames || names_ready)) {
 			visible = true;
 			screenshot = false;

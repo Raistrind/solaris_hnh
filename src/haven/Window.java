@@ -90,6 +90,7 @@ public class Window extends Widget implements DTarget {
 		storePosSet.add("Study");
 		storePosSet.add("Table");
 		storePosSet.add("World Map");
+		storePosSet.add("Handbook");
 	}
 
 	protected void placecbtn() {

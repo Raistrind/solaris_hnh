@@ -441,6 +441,8 @@ public class MiniMap extends Widget {
 				KerriUtils.drawPlayersAtMinimap(g, tc, hsz);
 			}
 		}
+		if (!hidden)
+			BreadcrumbTrail.draw(g, tc, hsz);
 		drawMapOverlay(g, tc, hsz);
 		g.gl.glPopMatrix();
 		super.draw(og);

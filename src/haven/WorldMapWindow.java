@@ -90,8 +90,12 @@ public class WorldMapWindow extends Window {
 			}
 		};
 		zoom = new Label(new Coord(170, 5), this, "");
-		new Label(new Coord(255, 5), this,
-				"Drag | Wheel zoom | Right-click marker");
+		new Button(new Coord(255, 2), 75, this, "Clear trail") {
+			public void click() {
+				BreadcrumbTrail.clear();
+			}
+		};
+		new Label(new Coord(335, 5), this, "Drag | Wheel | Right-click");
 
 		markerTitle = new Label(Coord.z, this, "Markers");
 		search = new TextEntry(Coord.z, new Coord(SIDEBAR_WIDTH, 20), this,

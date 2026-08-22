@@ -474,7 +474,8 @@ public class Widget {
 			if (!wdg.visible)
 				continue;
 			Coord cc = xlate(wdg.c, true);
-			if (c.isect(cc, wdg.sz)) {
+			Coord hitSize = (wdg.hsz == null) ? wdg.sz : wdg.hsz;
+			if (c.isect(cc, hitSize)) {
 				if ((ret = wdg.getcurs(c.add(cc.inv()))) != null)
 					return (ret);
 			}
@@ -491,7 +492,8 @@ public class Widget {
 			if (!wdg.visible)
 				continue;
 			Coord cc = xlate(wdg.c, true);
-			if (c.isect(cc, wdg.sz)) {
+			Coord hitSize = (wdg.hsz == null) ? wdg.sz : wdg.hsz;
+			if (c.isect(cc, hitSize)) {
 				Object ret = wdg.tooltip(c.add(cc.inv()), again
 						&& (wdg == prevtt));
 				if (ret != null) {
