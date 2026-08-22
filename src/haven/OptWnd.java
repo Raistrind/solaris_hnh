@@ -46,6 +46,8 @@ public class OptWnd extends Window {
     private Map<String, CamInfo> caminfomap = new HashMap<String, CamInfo>();
     private Map<String, String> camname2type = new HashMap<String, String>();
     private Map<String, String[]> camargs = new HashMap<String, String[]>();
+	private Label specializationPrimaryLabel;
+	private Label specializationSecondaryLabel;
     private Comparator<String> camcomp = new Comparator<String>() {
 	public int compare(String a, String b) {
 	    if(a.startsWith("The ")) a = a.substring(4);
@@ -691,14 +693,52 @@ public class OptWnd extends Window {
 				}
 			}).a = Config.showHotkeyOverlay;
 
-			new RichTextBox(new Coord(10, 315), new Coord(485, 95), tab,
-					"Hold $b{Shift} while hovering for the detailed level without changing this setting. Middle-click an inventory item for reverse recipe search. The recipe index stays local and learns exact ingredients when crafting windows are opened.",
-					foundry12).bg = new Color(0, 0, 0, 100);
-			new Button(new Coord(150, 430), 180, tab, "Open Offline Handbook") {
+			new Label(new Coord(10, 310), tab, "Specialization paths (optional):");
+			new Button(new Coord(10, 332), 135, tab, "Choose primary") {
+				public void click() {
+					SpecializationPicker.open(ui, true);
+				}
+			};
+			specializationPrimaryLabel = new Label(new Coord(155, 335), tab, "");
+			new Button(new Coord(10, 357), 135, tab, "Choose secondary") {
+				public void click() {
+					SpecializationPicker.open(ui, false);
+				}
+			};
+			specializationSecondaryLabel = new Label(new Coord(155, 360), tab, "");
+
+			(new CheckBox(new Coord(10, 387), tab, "Show specialization advice") {
+				public void changed(boolean val) {
+					Config.showSpecializationAdvice = val;
+					Config.saveOptions();
+				}
+			}).a = Config.showSpecializationAdvice;
+			(new CheckBox(new Coord(260, 387), tab, "Show compact goal panel") {
+				public void changed(boolean val) {
+					Config.showSpecializationOverlay = val;
+					Config.saveOptions();
+				}
+			}).a = Config.showSpecializationOverlay;
+			(new CheckBox(new Coord(10, 412), tab,
+					"Filter recipe list to selected paths") {
+				public void changed(boolean val) {
+					Config.filterSpecializationRecipes = val;
+					Config.saveOptions();
+				}
+			}).a = Config.filterSpecializationRecipes;
+
+			new Button(new Coord(80, 443), 170, tab, "Open Path Planner") {
+				public void click() {
+					SpecializationWindow.open(ui);
+				}
+			};
+			new Button(new Coord(260, 443), 180, tab, "Open Offline Handbook") {
 				public void click() {
 					KnowledgeWindow.open(ui, "home");
 				}
 			};
+			new Label(new Coord(35, 476), tab,
+					"Shift-hover: details | Middle-click: reverse recipes | Ctrl+Shift+P: planner");
 		}
 
 	new Frame(new Coord(0, 0), new Coord(0, 0), this);
@@ -708,6 +748,20 @@ public class OptWnd extends Window {
 			body.showtab(t);
 	}
     }
+
+	public void update(long dt) {
+		String primary = "Primary: " + Specialization
+				.pathName(Config.specializationPrimary);
+		String secondary = "Secondary: " + Specialization
+				.pathName(Config.specializationSecondary);
+		if ((specializationPrimaryLabel != null)
+				&& !primary.equals(specializationPrimaryLabel.texts))
+			specializationPrimaryLabel.settext(primary);
+		if ((specializationSecondaryLabel != null)
+				&& !secondary.equals(specializationSecondaryLabel.texts))
+			specializationSecondaryLabel.settext(secondary);
+		super.update(dt);
+	}
 
 
     private void setcamera(String camtype) {

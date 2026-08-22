@@ -6,18 +6,40 @@ import java.awt.Color;
 public class KnowledgeLink extends Label {
 	private final String documentId;
 	private final String help;
+	private final String specializationStat;
 
 	public KnowledgeLink(Coord c, Widget parent, String text, String documentId,
 			String help) {
+		this(c, parent, text, documentId, help, null);
+	}
+
+	public KnowledgeLink(Coord c, Widget parent, String text, String documentId,
+			String help, String specializationStat) {
 		super(c, parent, text);
 		this.documentId = documentId;
 		this.help = help;
-		setcolor(new Color(150, 205, 255));
+		this.specializationStat = specializationStat;
+		updateColor();
+	}
+
+	private void updateColor() {
+		Color target = (specializationStat != null)
+				&& Specialization.isRecommendedStat(specializationStat)
+				? new Color(255, 215, 90) : new Color(150, 205, 255);
+		if (!target.equals(col))
+			setcolor(target);
+	}
+
+	public void draw(GOut g) {
+		updateColor();
+		super.draw(g);
 	}
 
 	public Object tooltip(Coord c, boolean again) {
 		KnowledgeWindow.setDocumentContext(documentId);
-		return help + (Config.showTerminologyLinks
+		String currentHelp = (specializationStat == null) ? help
+				: KnowledgeBase.statTooltip(specializationStat);
+		return currentHelp + (Config.showTerminologyLinks
 				? "\nClick to open the offline handbook entry." : "");
 	}
 

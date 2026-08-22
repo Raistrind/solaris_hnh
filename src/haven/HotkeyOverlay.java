@@ -8,6 +8,7 @@ public final class HotkeyOverlay {
 	private static final String[][] HOTKEYS = {
 			{ "Help", "Ctrl+F1", "Open handbook or current context" },
 			{ "Help", "Ctrl+Shift+F1", "Toggle this overlay" },
+			{ "Planning", "Ctrl+Shift+P", "Open specialization planner" },
 			{ "Context", "Shift-hover", "Show advanced item/object details" },
 			{ "Context", "Middle-click item", "Find recipes using the item" },
 			{ "Maps", "Ctrl+M", "Toggle minimap" },

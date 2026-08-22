@@ -131,6 +131,11 @@ public class Config {
 	public static boolean showInventoryCategories = true;
 	public static boolean showBreadcrumbTrail = true;
 	public static boolean showHotkeyOverlay = true;
+	public static boolean showSpecializationAdvice = true;
+	public static boolean showSpecializationOverlay = true;
+	public static boolean filterSpecializationRecipes = false;
+	public static String specializationPrimary = "none";
+	public static String specializationSecondary = "none";
 
 	public static boolean assign_to_tile = false;
 
@@ -534,6 +539,16 @@ public class Config {
 				.equals("true");
 		showHotkeyOverlay = options.getProperty("showHotkeyOverlay", "true")
 				.equals("true");
+		showSpecializationAdvice = options.getProperty(
+				"showSpecializationAdvice", "true").equals("true");
+		showSpecializationOverlay = options.getProperty(
+				"showSpecializationOverlay", "true").equals("true");
+		filterSpecializationRecipes = options.getProperty(
+				"filterSpecializationRecipes", "false").equals("true");
+		specializationPrimary = options.getProperty("specializationPrimary",
+				"none").trim().toLowerCase(java.util.Locale.ENGLISH);
+		specializationSecondary = options.getProperty("specializationSecondary",
+				"none").trim().toLowerCase(java.util.Locale.ENGLISH);
 		hideTressp = options.getProperty("hideTressp", "false").equals("true");
 		hideTheft = options.getProperty("hideTheft", "false").equals("true");
 		hideAsslt = options.getProperty("hideAsslt", "false").equals("true");
@@ -707,6 +722,14 @@ public class Config {
 				: "false");
 		options.setProperty("showHotkeyOverlay", showHotkeyOverlay ? "true"
 				: "false");
+		options.setProperty("showSpecializationAdvice", showSpecializationAdvice
+				? "true" : "false");
+		options.setProperty("showSpecializationOverlay", showSpecializationOverlay
+				? "true" : "false");
+		options.setProperty("filterSpecializationRecipes",
+				filterSpecializationRecipes ? "true" : "false");
+		options.setProperty("specializationPrimary", specializationPrimary);
+		options.setProperty("specializationSecondary", specializationSecondary);
 		options.setProperty("hideTressp", hideTressp ? "true" : "false");
 		options.setProperty("hideTheft", hideTheft ? "true" : "false");
 		options.setProperty("hideAsslt", hideAsslt ? "true" : "false");

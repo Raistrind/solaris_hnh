@@ -513,6 +513,15 @@ public class APXUtils {
 					}
 				});
 
+		addResource("specialization_planner", "Path Planner",
+				"Choose and follow optional specialization paths", 'P', resScript2,
+				unionRoot, new MenuElemetUseListener(null) {
+					public void use(int button) {
+						if (button == 1)
+							SpecializationWindow.toggle(UI.instance);
+					}
+				});
+
 		addResource("toggle_draw_pf_map", "Toggle PF Map", "Shows some shit...", 'T',
 				resScript2, unionRoot,
 				new MenuElemetUseListener(null) {

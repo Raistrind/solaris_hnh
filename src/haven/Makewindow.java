@@ -62,8 +62,14 @@ public class Makewindow extends HWindow {
 		rLabel.setcolor(Color.black); //Kerri
 		obtn = new Button(new Coord(290, 71), 60, this, "Craft");
 		cbtn = new Button(new Coord(360, 71), 60, this, "Craft All");
-		if (Config.showItemContext && (Config.explanationLevel > 0)) {
-			setsz(new Coord(430, 145));
+		boolean showQualityHelp = Config.showItemContext
+				&& (Config.explanationLevel > 0);
+		String pathAdvice = Config.showSpecializationAdvice ? Specialization
+				.recipeAdvice(rcpnm) : "";
+		if (showQualityHelp || (pathAdvice.length() > 0)) {
+			setsz(new Coord(430, (pathAdvice.length() > 0) ? 180 : 145));
+		}
+		if (showQualityHelp) {
 			if (Config.showTerminologyLinks)
 				new KnowledgeLink(new Coord(10, 105), this, "Quality help",
 						"term-quality", KnowledgeBase.craftingQualityText());
@@ -71,6 +77,13 @@ public class Makewindow extends HWindow {
 				new Label(new Coord(10, 105), this, "Quality:");
 			new Label(new Coord(90, 102), this, KnowledgeBase
 					.craftingQualityText(), 325);
+		}
+		if (pathAdvice.length() > 0) {
+			Label pathLabel = new Label(new Coord(10, showQualityHelp ? 137 : 105),
+					this, "Path:");
+			pathLabel.setcolor(new Color(190, 145, 30));
+			new Label(new Coord(50, showQualityHelp ? 134 : 102), this,
+					pathAdvice, 365);
 		}
 	}
 	

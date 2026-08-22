@@ -53,7 +53,11 @@ public class RootWidget extends ConsoleHost {
 
 	public boolean globtype(char key, KeyEvent ev) {
 		int globalCode = ev.getKeyCode();
-		if ((globalCode == KeyEvent.VK_F1) && ev.isControlDown()
+		if ((globalCode == KeyEvent.VK_P) && ev.isControlDown()
+				&& ev.isShiftDown()) {
+			SpecializationWindow.toggle(ui);
+			return true;
+		} else if ((globalCode == KeyEvent.VK_F1) && ev.isControlDown()
 				&& ev.isShiftDown()) {
 			HotkeyOverlay.toggle();
 			return true;
@@ -141,6 +145,8 @@ public class RootWidget extends ConsoleHost {
 		}
 		super.draw(g);
 		drawcmd(g, new Coord(20, 580));
+		Specialization.tick(ui);
+		Specialization.drawOverlay(g, sz);
 		HotkeyOverlay.draw(g, sz);
 		if (screenshot && (!Config.sshot_nonames || names_ready)) {
 			visible = true;

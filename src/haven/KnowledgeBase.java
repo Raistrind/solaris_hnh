@@ -30,6 +30,7 @@ public final class KnowledgeBase {
 	public static final String TERMS = "Terms";
 	public static final String STATS = "Stats";
 	public static final String RECIPES = "Recipes";
+	public static final String PATHS = "Paths";
 	private static final File RECIPE_FILE = new File("knowledge-recipes.conf");
 	private static final Pattern ARMOR = Pattern.compile(
 			"Armor class:\\s*(\\d+)\\s*/\\s*(\\d+)",
@@ -160,9 +161,10 @@ public final class KnowledgeBase {
 				+ link("getting-started", "Getting started") + "   "
 				+ link("inventory-crafting", "Inventory and crafting") + "\n"
 				+ link("food-fep", "Food and FEP") + "   "
-				+ link("exploration-map", "Exploration and maps") + "\n\n"
+				+ link("exploration-map", "Exploration and maps") + "\n"
+				+ link("specialization-current", "My specialization path") + "\n\n"
 				+ "$b{Context controls}\n"
-				+ "Hold Shift while hovering for detailed information. Middle-click an inventory item to find recipes that use it. Ctrl+F1 opens this handbook; Ctrl+Shift+F1 toggles the hotkey overlay.");
+				+ "Hold Shift while hovering for detailed information. Middle-click an inventory item to find recipes that use it. Ctrl+F1 opens this handbook; Ctrl+Shift+F1 toggles the hotkey overlay; Ctrl+Shift+P opens the specialization planner.");
 		addDoc("getting-started", "Getting Started", GUIDES,
 				"$size[15]{$b{Getting Started}}\n\n"
 				+ "Begin with food, water, basic tools, storage and a recognizable route home. Avoid committing every material to one project until you understand how it is obtained.\n\n"
@@ -177,7 +179,7 @@ public final class KnowledgeBase {
 				+ link("term-quality", "Quality") + ".");
 		addDoc("controls", "Controls and Hotkeys", GUIDES,
 				"$size[15]{$b{Controls and Hotkeys}}\n\n"
-				+ "$b{Help}\nCtrl+F1: handbook or current context\nCtrl+Shift+F1: hotkey overlay\nShift-hover: advanced information\nMiddle-click item: recipes using it\n\n"
+				+ "$b{Help}\nCtrl+F1: handbook or current context\nCtrl+Shift+F1: hotkey overlay\nCtrl+Shift+P: specialization planner\nShift-hover: advanced information\nMiddle-click item: recipes using it\n\n"
 				+ "$b{Maps and view}\nCtrl+M: minimap\nCtrl+Shift+M: world map\nCtrl+G: grid\nHome: reset camera\nEnd: screenshot\n\n"
 				+ "$b{Movement}\nAlt+Q/W/E/R: crawl, walk, run, sprint\nCtrl+N: night vision\nCtrl+X: x-ray\nCtrl+H: hide configured objects\n\n"
 				+ "Toolbar assignments can override some function keys. The on-screen overlay lists the client-level bindings added by Solaris.");
@@ -185,6 +187,7 @@ public final class KnowledgeBase {
 				"$size[15]{$b{Inventory and Crafting}}\n\n"
 				+ "Colored item borders identify broad categories. Hold Shift over an item for sources, common uses, requirements, location hints and quality context.\n\n"
 				+ "$b{Category colors}\nGreen: food   Purple: curiosity   Blue: tool   Red: weapon   Gold: equipment\nBrown: material   Pink: forageable   Orange: crop   Cyan: liquid   Gray: other\n\n"
+				+ "$b{Specialization corners}\nA small gold corner marks an item relevant to the primary path; cyan marks one relevant only to the secondary path. These markers can be disabled in Options > Help.\n\n"
 				+ "$b{Recipe encyclopedia}\nUnlocked crafting pages are indexed automatically. When a recipe is opened, the server-supplied ingredient and result list is saved locally. This lets the handbook remember exact ingredients and perform reverse searches later.\n\n"
 				+ "Middle-click any inventory item to list recipes that use it. A recipe not yet opened can still appear by name, but exact ingredients become available only after the crafting window has supplied them.\n\n"
 				+ "Related: " + link("term-quality", "Quality") + " and "
@@ -550,6 +553,8 @@ public final class KnowledgeBase {
 		if (mode == 1) {
 			if (info.obtainedFrom.length() > 0)
 				appendInfo(text, "Source", info.obtainedFrom);
+			text.append(Specialization.itemAdvice(name, resourceName,
+					info.category, false));
 			text.append("\n$col[170,170,170]{Hold Shift for uses, requirements, location and quality help.}");
 		} else {
 			List<Recipe> using = recipesUsing(name, resourceName);
@@ -574,6 +579,8 @@ public final class KnowledgeBase {
 			appendInfo(text, "Quality", quality);
 			if (Config.showEquipmentComparison)
 				text.append(equipmentComparison(item));
+			text.append(Specialization.itemAdvice(name, resourceName,
+					info.category, true));
 			text.append("\n$col[170,170,170]{Middle-click: recipes using this item.");
 			if (Config.showTerminologyLinks)
 				text.append(" Ctrl+F1: handbook context.");
@@ -639,6 +646,8 @@ public final class KnowledgeBase {
 		appendInfo(text, "Category", info.category);
 		if (mode == 1) {
 			appendInfo(text, "Common use", info.usedFor);
+			text.append(Specialization.itemAdvice(name, resource.name,
+					info.category, false));
 			text.append("\n$col[170,170,170]{Hold Shift for source, requirements and location.}");
 		} else {
 			appendInfo(text, "Used for", info.usedFor);
@@ -646,6 +655,8 @@ public final class KnowledgeBase {
 			appendInfo(text, "Requires", info.requirements);
 			appendInfo(text, "Where", info.location);
 			appendInfo(text, "Quality", info.quality);
+			text.append(Specialization.itemAdvice(name, resource.name,
+					info.category, true));
 			text.append("\n$col[130,130,130]{Resource: ").append(q(resource.name));
 			text.append(" | Object id: ").append(gob.id).append("}");
 			if (Config.showTerminologyLinks)
@@ -684,7 +695,8 @@ public final class KnowledgeBase {
 		int end = plain.indexOf("\n\n");
 		if (end >= 0)
 			plain = plain.substring(0, end);
-		return plain + "\nClick to open the handbook entry.";
+		return plain + Specialization.statAdvice(id)
+				+ "\nClick to open the handbook entry.";
 	}
 
 	public static String craftingQualityText() {
@@ -702,6 +714,10 @@ public final class KnowledgeBase {
 
 	public static synchronized int generation() {
 		return generation;
+	}
+
+	public static synchronized List<Recipe> allRecipes() {
+		return new ArrayList<Recipe>(recipes.values());
 	}
 
 	public static synchronized void recordRecipe(String name,
@@ -824,11 +840,24 @@ public final class KnowledgeBase {
 		for (Recipe recipe : recipes.values()) {
 			Document document = recipeDocument(recipe);
 			if ((category.equals(ALL) || category.equals(RECIPES))
+					&& (!category.equals(RECIPES)
+							|| !Config.filterSpecializationRecipes
+							|| !Specialization.active()
+							|| Specialization.recipeRelevant(recipe))
 					&& document.matches(query))
 				found.add(document);
 		}
+		found.addAll(Specialization.documents(category, query));
 		Collections.sort(found, new Comparator<Document>() {
 			public int compare(Document a, Document b) {
+				if (a.category.equals(RECIPES) && b.category.equals(RECIPES)) {
+					Recipe ar = recipeById(a.id);
+					Recipe br = recipeById(b.id);
+					boolean arelevant = Specialization.recipeRelevant(ar);
+					boolean brelevant = Specialization.recipeRelevant(br);
+					if (arelevant != brelevant)
+						return arelevant ? -1 : 1;
+				}
 				int categoryOrder = a.category.compareToIgnoreCase(b.category);
 				return (categoryOrder != 0) ? categoryOrder : a.title
 						.compareToIgnoreCase(b.title);
@@ -843,10 +872,20 @@ public final class KnowledgeBase {
 		Document document = documents.get(id);
 		if (document != null)
 			return document;
+		document = Specialization.document(id);
+		if (document != null)
+			return document;
 		for (Recipe recipe : recipes.values()) {
 			if (recipe.id().equals(id))
 				return recipeDocument(recipe);
 		}
+		return null;
+	}
+
+	private static Recipe recipeById(String id) {
+		for (Recipe recipe : recipes.values())
+			if (recipe.id().equals(id))
+				return recipe;
 		return null;
 	}
 
@@ -885,6 +924,7 @@ public final class KnowledgeBase {
 			}
 		}
 		body.append("\n$b{Quality}\n").append(q(craftingQualityText()));
+		body.append(Specialization.recipeDetails(recipe));
 		return new Document(recipe.id(), recipe.name, RECIPES, body.toString());
 	}
 

@@ -845,11 +845,16 @@ public class CharWnd extends Window {
 
 	private Label contextualLabel(Coord c, Widget parent, String text,
 			String documentId, String explanation) {
+		String statId = documentId.startsWith("stat-") ? documentId.substring(5)
+				: null;
 		if (Config.showTerminologyLinks && (Config.explanationLevel > 0))
-			return new KnowledgeLink(c, parent, text, documentId, explanation);
+			return new KnowledgeLink(c, parent, text, documentId, explanation,
+					statId);
 		Label label = new Label(c, parent, text);
 		if (Config.explanationLevel > 0)
 			label.tooltip = explanation;
+		if ((statId != null) && Specialization.isRecommendedStat(statId))
+			label.setcolor(new Color(255, 215, 90));
 		return label;
 	}
 

@@ -27,6 +27,7 @@ public class KnowledgeWindow extends Window {
 	private String category = KnowledgeBase.ALL;
 	private String lastSearch = null;
 	private int lastGeneration = -1;
+	private int lastSpecializationGeneration = -1;
 	private KnowledgeBase.Document selected;
 
 	public static void toggle(UI ui) {
@@ -87,12 +88,13 @@ public class KnowledgeWindow extends Window {
 		search = new TextEntry(new Coord(0, 2), new Coord(205, 20), this, "");
 		search.tooltip = "Search guides, terms, stats and recipes";
 		addFilterButton(0, 28, 32, KnowledgeBase.ALL);
-		addFilterButton(34, 28, 43, KnowledgeBase.GUIDES);
-		addFilterButton(79, 28, 40, KnowledgeBase.TERMS);
-		addFilterButton(121, 28, 35, KnowledgeBase.STATS);
-		addFilterButton(158, 28, 52, KnowledgeBase.RECIPES);
+		addFilterButton(34, 28, 48, KnowledgeBase.GUIDES);
+		addFilterButton(84, 28, 44, KnowledgeBase.TERMS);
+		addFilterButton(0, 50, 40, KnowledgeBase.STATS);
+		addFilterButton(42, 50, 58, KnowledgeBase.RECIPES);
+		addFilterButton(102, 50, 48, KnowledgeBase.PATHS);
 
-		list = new DocumentList(new Coord(0, 55), new Coord(210, 330), this);
+		list = new DocumentList(new Coord(0, 77), new Coord(210, 308), this);
 		title = new Label(new Coord(220, 3), this, "Offline Handbook",
 				new Text.Foundry(new Font("SansSerif", Font.BOLD, 14), Color.WHITE));
 		content = new RichTextBox(new Coord(220, 25), new Coord(470, 355), this,
@@ -118,6 +120,7 @@ public class KnowledgeWindow extends Window {
 	private void refreshList() {
 		lastSearch = search.text;
 		lastGeneration = KnowledgeBase.generation();
+		lastSpecializationGeneration = Specialization.generation();
 		List<KnowledgeBase.Document> found = KnowledgeBase.documents(category,
 				lastSearch);
 		list.setDocuments(found);
@@ -143,7 +146,8 @@ public class KnowledgeWindow extends Window {
 
 	public void update(long dt) {
 		if ((lastSearch == null) || !lastSearch.equals(search.text)
-				|| (lastGeneration != KnowledgeBase.generation()))
+				|| (lastGeneration != KnowledgeBase.generation())
+				|| (lastSpecializationGeneration != Specialization.generation()))
 			refreshList();
 		super.update(dt);
 	}

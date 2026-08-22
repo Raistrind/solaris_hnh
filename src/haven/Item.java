@@ -289,6 +289,18 @@ public class Item extends Widget implements DTarget {
 			g.rect(Coord.z, sz.sub(1, 1));
 			g.chcolor();
 		}
+		if (Config.showSpecializationAdvice && !isDragging && (res.get() != null)) {
+			Resource resource = res.get();
+			String displayName = KnowledgeBase.displayName(resource);
+			String category = KnowledgeBase.infoFor(displayName, resource.name).category;
+			Color pathColor = Specialization.itemColor(displayName, resource.name,
+					category);
+			if (pathColor != null) {
+				g.chcolor(pathColor);
+				g.frect(new Coord(Math.max(0, sz.x - 7), 1), new Coord(6, 6));
+				g.chcolor();
+			}
+		}
 	}
 
 	static Tex getqtex(int q){
