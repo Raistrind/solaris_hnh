@@ -33,6 +33,7 @@ import haven.MCache.Grid;
 import haven.MCache.Overlay;
 import haven.Resource.Tile;
 import haven.Coord;
+import haven.resutil.GrowingPlant;
 import java.awt.Color;
 import java.awt.event.KeyEvent;
 import java.lang.reflect.Constructor;
@@ -44,6 +45,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
 import java.util.TreeMap;
@@ -92,6 +94,8 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 	public boolean waitForSelect = false; 	//used for JS selectObject
 	public Gob objectUnderMouse = null;   	//current object under mouse (hover)
 	public Coord myLastCoord;				//my last coord
+	private Gob flowerMenuTarget = null;
+	private long flowerMenuTargetTime = 0;
 	//private ArrayList<Integer> ignoredObjects = new ArrayList<Integer>();
 	
 	
@@ -666,11 +670,91 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 		return (null);
 	}
 
+	public static class CropInfo {
+		public final String name;
+		public final int stage;
+		public final int stages;
+
+		public CropInfo(String name, int stage, int stages) {
+			this.name = name;
+			this.stage = stage;
+			this.stages = stages;
+		}
+	}
+
+	static String cropDisplayName(String resourceName) {
+		if (resourceName == null)
+			return null;
+		String prefix = "gfx/terobjs/plants/";
+		if (!resourceName.startsWith(prefix))
+			return null;
+		String baseName = resourceName.substring(prefix.length());
+		if (baseName.equals("wine"))
+			return "Grapevine";
+		String[] words = baseName.split("[-_]");
+		StringBuilder name = new StringBuilder();
+		for (String word : words) {
+			if (word.length() == 0)
+				continue;
+			if (name.length() > 0)
+				name.append(' ');
+			name.append(word.substring(0, 1).toUpperCase(Locale.ENGLISH));
+			name.append(word.substring(1));
+		}
+		return (name.length() > 0) ? name.toString() : "Crop";
+	}
+
+	private CropInfo cropInfo(Gob gob) {
+		if (gob == null)
+			return null;
+		Resource resource = gob.getres();
+		if (resource == null)
+			return null;
+		String cropName = cropDisplayName(resource.name);
+		if (cropName == null)
+			return null;
+		Resource.Tooltip tooltip = resource.layer(Resource.tooltip);
+		if ((tooltip != null) && (tooltip.t != null)
+				&& (tooltip.t.trim().length() > 0))
+			cropName = tooltip.t.trim();
+
+		int stage = -1;
+		int stages = 0;
+		ResDrawable drawable = gob.getattr(ResDrawable.class);
+		if (drawable != null) {
+			drawable.init();
+			if (drawable.spr instanceof GrowingPlant) {
+				GrowingPlant plant = (GrowingPlant) drawable.spr;
+				stage = plant.stage();
+				stages = plant.stages();
+			}
+		}
+		return new CropInfo(cropName, stage, stages);
+	}
+
+	private void rememberFlowerMenuTarget(Gob target) {
+		flowerMenuTarget = target;
+		flowerMenuTargetTime = System.currentTimeMillis();
+	}
+
+	public CropInfo consumeFlowerMenuCropInfo() {
+		Gob target = flowerMenuTarget;
+		long targetTime = flowerMenuTargetTime;
+		flowerMenuTarget = null;
+		flowerMenuTargetTime = 0;
+		if ((target == null)
+				|| ((System.currentTimeMillis() - targetTime) > 10000))
+			return null;
+		return cropInfo(target);
+	}
+
 	public boolean mousedown(Coord c, int button) {
 		setfocus(this);
 		Coord c0 = c;
 		c = new Coord((int) (c.x / getScale()), (int) (c.y / getScale()));
 		Gob hit = gobatpos(c);
+		if (button == 3)
+			rememberFlowerMenuTarget(hit);
 		// PF
 		if (path != null && button != 3) {
 			path.clear();
@@ -713,6 +797,7 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 			}
 			// PF
 			if (button == 3 && ui.modctrl && ui.modshift) {
+				rememberFlowerMenuTarget(null);
 				if (hit == null)
 					path_interact_object = null;
 				else

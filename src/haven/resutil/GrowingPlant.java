@@ -61,6 +61,8 @@ public class GrowingPlant extends CSprite {
 	public Sprite create(Owner owner, Resource res, Message sdt) {
 	    int m = sdt.uint8();
 	    GrowingPlant spr = new GrowingPlant(owner, res);
+	    spr.stage = m;
+	    spr.stages = strands.length;
 	    spr.addnegative();
 	    Random rnd = owner.mkrandoom();
 	    int n = Config.simple_plants?1:num;
@@ -80,5 +82,16 @@ public class GrowingPlant extends CSprite {
     
     protected GrowingPlant(Owner owner, Resource res) {
 	super(owner, res);
+    }
+
+    private int stage = -1;
+    private int stages = 0;
+
+    public int stage() {
+	return stage;
+    }
+
+    public int stages() {
+	return stages;
     }
 }
