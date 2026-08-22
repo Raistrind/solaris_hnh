@@ -42,6 +42,7 @@ import java.io.InputStream;
 import java.io.Writer;
 import java.net.URL;
 import java.net.URLConnection;
+import java.net.URLEncoder;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
 import java.util.HashSet;
@@ -60,9 +61,15 @@ public class MiniMap extends Widget {
 	static Loader loader = new Loader();
 	static Coord mappingStartPoint = null;
 	static long mappingSession = 0;
-	static Map<String, Coord> gridsHashes = new TreeMap<String, Coord>();
-	static Map<Coord, String> coordHashes = new TreeMap<Coord, String>();
+	static Map<String, Coord> gridsHashes = java.util.Collections
+			.synchronizedMap(new TreeMap<String, Coord>());
+	static Map<Coord, String> coordHashes = java.util.Collections
+			.synchronizedMap(new TreeMap<Coord, String>());
 	static Map<Coord, Tex> caveTex = new TreeMap<Coord, Tex>();
+	private static final PersistentMapStore persistentMap =
+			new PersistentMapStore(new File("map/persistent"));
+	private static boolean awaitingPersistentAnchor = false;
+	private static int persistentAnchorFrames = 0;
 	public static final Tex bg = Resource.loadtex("gfx/hud/mmap/ptex");
 	public static final Tex nomap = Resource.loadtex("gfx/hud/mmap/nomap");
 	public static final Resource plx = Resource.load("gfx/hud/mmap/x");
@@ -101,11 +108,12 @@ public class MiniMap extends Widget {
 		}
 
 		private InputStream getcached(String nm) throws IOException {
-			/*
-			 * if(ResCache.global == null) throw(new
-			 * FileNotFoundException("No resource cache installed"));
-			 * return(ResCache.global.fetch("mm/" + nm));
-			 */
+			if (Config.autoSaveMinimaps) {
+				try {
+					return persistentMap.openTile(nm);
+				} catch (FileNotFoundException e) {
+				}
+			}
 			if (mappingSession > 0) {
 				String fileName;
 				if (gridsHashes.containsKey(nm)) {
@@ -139,36 +147,28 @@ public class MiniMap extends Widget {
 					if (grid == null)
 						break;
 					try {
-						InputStream in;
 						boolean cached;
-						try {
-							in = getcached(grid);
-							cached = true;
-						} catch (FileNotFoundException e) {
-							in = getreal(grid);
-							cached = false;
-						}
+						boolean replacePersistentTile = false;
 						BufferedImage img;
 						try {
-							img = ImageIO.read(in);
-							if ((!cached) & (mappingSession > 0) && Config.autoSaveMinimaps) {
-								String fileName;
-								if (gridsHashes.containsKey(grid)) {
-									Coord coordinates = gridsHashes.get(grid);
-									fileName = "tile_" + coordinates.x + "_"
-											+ coordinates.y;
-								} else {
-									fileName = grid;
-								}
-
-								File outputfile = new File("map/"
-										+ Utils.sessdate(mappingSession) + "/"
-										+ fileName + ".png");
-								ImageIO.write(img, "png", outputfile);
-							}//HUI
-						} finally {
-							Utils.readtileof(in);
-							in.close();
+							img = readImage(getcached(grid), grid);
+							cached = true;
+						} catch (IOException e) {
+							img = readImage(getreal(grid), grid);
+							cached = false;
+							replacePersistentTile = true;
+						}
+						if ((!cached) & (mappingSession > 0) && Config.autoSaveMinimaps) {
+							try {
+								if (replacePersistentTile)
+									persistentMap.replaceTile(grid, img);
+								else
+									persistentMap.saveTile(grid, img);
+								saveSessionTile(grid, img);
+							} catch (IOException ex) {
+								System.out.println("Could not save minimap tile " +
+										grid + ": " + ex);
+							}
 						}
 						Tex tex = new TexI(img);
 						synchronized (grids) {
@@ -212,17 +212,85 @@ public class MiniMap extends Widget {
 	public static void newMappingSession() {
 		long newSession = System.currentTimeMillis();
 		String date = Utils.sessdate(newSession);
+		mappingSession = newSession;
+		mappingStartPoint = null;
+		gridsHashes.clear();
+		coordHashes.clear();
+		awaitingPersistentAnchor = false;
+		persistentAnchorFrames = 0;
+		if (!Config.autoSaveMinimaps)
+			return;
 		try {
-			if(Config.autoSaveMinimaps){
-			(new File("map/" + date)).mkdirs();
-			Writer currentSessionFile = new FileWriter("map/currentsession.js");
-			currentSessionFile.write("var currentSession = '" + date + "';\n");
-			currentSessionFile.close();}
-			mappingSession = newSession;
-			mappingStartPoint = null;
-			gridsHashes.clear();
-			coordHashes.clear();
+			prepareSessionDirectory(date);
+			persistentMap.loadInto(gridsHashes, coordHashes);
+			awaitingPersistentAnchor = !gridsHashes.isEmpty();
 		} catch (IOException ex) {
+			System.out.println("Could not initialize persistent minimap: " + ex);
+		}
+	}
+
+	public static void enableMapSaving() {
+		if (!Config.autoSaveMinimaps)
+			return;
+		newMappingSession();
+		saveLoadedTiles();
+	}
+
+	private static void prepareSessionDirectory(String date) throws IOException {
+		File directory = new File("map", date);
+		PersistentMapStore.ensureDirectory(directory);
+		Writer writer = null;
+		try {
+			writer = new FileWriter(new File("map", "currentsession.js"));
+			writer.write("var currentSession = '" + date + "';\n");
+		} finally {
+			if (writer != null)
+				writer.close();
+		}
+	}
+
+	private static void saveSessionTile(String gridName, BufferedImage image)
+			throws IOException {
+		String date = Utils.sessdate(mappingSession);
+		File directory = new File("map", date);
+		PersistentMapStore.ensureDirectory(directory);
+		String fileName;
+		Coord coordinate = gridsHashes.get(gridName);
+		if (coordinate == null) {
+			fileName = URLEncoder.encode(gridName, "UTF-8");
+		} else {
+			fileName = "tile_" + coordinate.x + "_" + coordinate.y;
+		}
+		if (!ImageIO.write(image, "png", new File(directory, fileName + ".png")))
+			throw new IOException("No PNG writer is available");
+	}
+
+	private static void saveLoadedTiles() {
+		synchronized (grids) {
+			for (Map.Entry<String, Tex> entry : grids.entrySet()) {
+				if (entry.getValue() instanceof TexI) {
+					try {
+						persistentMap.saveTile(entry.getKey(),
+								((TexI) entry.getValue()).back);
+					} catch (IOException ex) {
+						System.out.println("Could not save minimap tile " +
+								entry.getKey() + ": " + ex);
+					}
+				}
+			}
+		}
+	}
+
+	private static BufferedImage readImage(InputStream input, String grid)
+			throws IOException {
+		try {
+			BufferedImage image = ImageIO.read(input);
+			if (image == null)
+				throw new IOException("Invalid minimap image " + grid);
+			return image;
+		} finally {
+			Utils.readtileof(input);
+			input.close();
 		}
 	}
 
@@ -296,11 +364,63 @@ public class MiniMap extends Widget {
 		return pl.rc.add(lc.sub(pl.rc.div(tileSize).add(mv.mc.div(tileSize).add(off.div(scales[scale])).inv()).add(sz.div(scales[scale]).div(2))).mul(tileSize));
 	}
 
+	private void resolvePersistentAnchor(Coord centerGrid) {
+		if (!Config.autoSaveMinimaps || !awaitingPersistentAnchor)
+			return;
+		Coord knownGrid = null;
+		Coord knownCoordinate = null;
+		boolean centerAvailable = false;
+		synchronized (ui.sess.glob.map.req) {
+			synchronized (ui.sess.glob.map.grids) {
+				for (int radius = 0; (radius <= 2) && (knownGrid == null);
+						radius++) {
+					for (int y = -radius; (y <= radius) &&
+							(knownGrid == null); y++) {
+						for (int x = -radius; x <= radius; x++) {
+							Coord gridCoordinate = centerGrid.add(x, y);
+							Grid candidate = ui.sess.glob.map.grids
+									.get(gridCoordinate);
+							if ((x == 0) && (y == 0) &&
+									(candidate != null))
+								centerAvailable = true;
+							if ((candidate == null) || (candidate.mnm == null))
+								continue;
+							Coord saved = gridsHashes.get(candidate.mnm);
+							if (saved != null) {
+								knownGrid = gridCoordinate;
+								knownCoordinate = saved;
+								break;
+							}
+						}
+					}
+				}
+			}
+		}
+		if (knownGrid != null) {
+			mappingStartPoint = knownGrid.sub(knownCoordinate);
+			awaitingPersistentAnchor = false;
+			persistentAnchorFrames = 0;
+			return;
+		}
+		if (!centerAvailable || (++persistentAnchorFrames < 60))
+			return;
+		try {
+			Coord origin = persistentMap.nextComponentOrigin();
+			mappingStartPoint = centerGrid.sub(origin);
+			awaitingPersistentAnchor = false;
+		} catch (IOException ex) {
+			persistentAnchorFrames = 0;
+			System.out.println("Could not place a new minimap atlas section: " +
+					ex);
+		}
+	}
+
 	public void draw(GOut og) {
 		double scale = getScale();
 		Coord hsz = sz.div(scale);
 
 		Coord tc = viewCenter();
+		resolvePersistentAnchor(tc.div(cmaps));
 		Coord ulg = tc.div(cmaps);
 		while ((ulg.x * cmaps.x) - tc.x + (hsz.x / 2) > 0)
 			ulg.x--;
@@ -340,7 +460,8 @@ public class MiniMap extends Widget {
 					String mnm = null;
 
 					if (grid == null) {
-						mnm = coordHashes.get(relativeCoordinates);
+						if (!awaitingPersistentAnchor)
+							mnm = coordHashes.get(relativeCoordinates);
 					} else {
 						mnm = grid.mnm;
 					}
@@ -349,15 +470,31 @@ public class MiniMap extends Widget {
 
 					if (mnm != null) {
 						caveTex.clear();
-						if (!gridsHashes.containsKey(mnm)) {
-							if ((Math.abs(relativeCoordinates.x) > 450)
-									|| (Math.abs(relativeCoordinates.y) > 450)) {
+						if (awaitingPersistentAnchor &&
+								!gridsHashes.containsKey(mnm)) {
+							tex = grid.getTex();
+						} else if (!gridsHashes.containsKey(mnm)) {
+							if (!Config.autoSaveMinimaps &&
+									((Math.abs(relativeCoordinates.x) > 450)
+									|| (Math.abs(relativeCoordinates.y) > 450))) {
 								newMappingSession();
 								mappingStartPoint = cg;
 								relativeCoordinates = new Coord(0, 0);
 							}
+							String previousGrid = coordHashes.put(
+									relativeCoordinates, mnm);
+							if ((previousGrid != null) &&
+									!previousGrid.equals(mnm))
+								gridsHashes.remove(previousGrid);
 							gridsHashes.put(mnm, relativeCoordinates);
-							coordHashes.put(relativeCoordinates, mnm);
+							if (Config.autoSaveMinimaps) {
+								try {
+									persistentMap.record(mnm, relativeCoordinates);
+								} catch (IOException ex) {
+									System.out.println("Could not index minimap tile " +
+											mnm + ": " + ex);
+								}
+							}
 						} else {
 							Coord coordinates = gridsHashes.get(mnm);
 							if (!coordinates.equals(relativeCoordinates)) {
@@ -365,9 +502,11 @@ public class MiniMap extends Widget {
 										.add(relativeCoordinates
 												.sub(coordinates));
 							}
+							awaitingPersistentAnchor = false;
 						}
 
-						tex = getgrid(mnm);
+						if (tex == null)
+							tex = getgrid(mnm);
 						if ((tex == null) && (grid != null)) {
 							tex = grid.getTex();
 						}

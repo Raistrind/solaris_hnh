@@ -6,8 +6,10 @@ import java.util.List;
 
 /** Session-local, bounded movement trail rendered by both map views. */
 public final class BreadcrumbTrail {
-	private static final int MAX_POINTS = 300;
-	private static final double MIN_TILE_DISTANCE = 2.0;
+	private static final int MAX_POINTS = 1000;
+	private static final double MIN_TILE_DISTANCE = 10.0;
+	private static final int DOT_RADIUS = 2;
+	private static final int ENDPOINT_RADIUS = 3;
 	private static final List<Coord> points = new ArrayList<Coord>();
 
 	private BreadcrumbTrail() {
@@ -42,18 +44,30 @@ public final class BreadcrumbTrail {
 	}
 
 	public static synchronized void draw(GOut g, Coord center, Coord mapSize) {
-		if (!Config.showBreadcrumbTrail || (points.size() < 2))
+		if (!Config.showBreadcrumbTrail || points.isEmpty())
 			return;
 		Coord half = mapSize.div(2);
 		g.chcolor(new Color(255, 190, 70, 180));
-		Coord previous = points.get(0).sub(center).add(half);
-		for (int i = 1; i < points.size(); i++) {
-			Coord current = points.get(i).sub(center).add(half);
-			g.line(previous, current, 2);
-			previous = current;
+		Coord latest = null;
+		for (int i = 0; i < points.size(); i++) {
+			Coord dot = points.get(i).sub(center).add(half);
+			if (i == (points.size() - 1)) {
+				latest = dot;
+			} else if (inside(dot, mapSize, DOT_RADIUS)) {
+				g.fellipse(dot, new Coord(DOT_RADIUS, DOT_RADIUS));
+			}
 		}
-		g.chcolor(new Color(255, 230, 120, 230));
-		g.fellipse(previous, new Coord(3, 3));
+		if ((latest != null) && inside(latest, mapSize, ENDPOINT_RADIUS)) {
+			g.chcolor(new Color(255, 230, 120, 230));
+			g.fellipse(latest, new Coord(ENDPOINT_RADIUS,
+					ENDPOINT_RADIUS));
+		}
 		g.chcolor();
+	}
+
+	private static boolean inside(Coord point, Coord size, int margin) {
+		return (point.x >= margin) && (point.y >= margin) &&
+				(point.x < (size.x - margin)) &&
+				(point.y < (size.y - margin));
 	}
 }

@@ -46,6 +46,8 @@ public class Inventory extends Widget implements DTarget {
 	private final IButton trash;
 	private final Button transferAll;
 	private final Button transferPresent;
+	private final Button sortButton;
+	private final InventorySorter sorter;
 	private final AtomicBoolean wait = new AtomicBoolean(false);
 
 	static {
@@ -77,7 +79,7 @@ public class Inventory extends Widget implements DTarget {
 		super(c, invSqSizeSubOne.mul(sz).add(new Coord(17, 1)), parent);
 		isz = sz;
 		if ((parent instanceof Window) &&
-				!isTableWindow((Window) parent)) {
+				isStorageWindow((Window) parent)) {
 			Window wnd = (Window) parent;
 			boolean playerInventory = isPlayerInventoryWindow(wnd);
 			transferAll = new Button(Coord.z, 110, this,
@@ -92,9 +94,18 @@ public class Inventory extends Widget implements DTarget {
 					transferPresentItems();
 				}
 			};
+			sortButton = new Button(Coord.z, 110, this, "Sort") {
+				public void click() {
+					if (sorter != null)
+						sorter.toggle();
+				}
+			};
+			sorter = new InventorySorter(this, sortButton);
 		} else {
 			transferAll = null;
 			transferPresent = null;
+			sortButton = null;
+			sorter = null;
 		}
 
 		// removed trash can from inventory -trev
@@ -121,6 +132,12 @@ public class Inventory extends Widget implements DTarget {
 		if (amount > 0)
 			wdgmsg("xfer", 1, mod);
 		return (true);
+	}
+
+	public void update(long dt) {
+		super.update(dt);
+		if (sorter != null)
+			sorter.update();
 	}
 	
 	public Coord size() {
@@ -288,6 +305,8 @@ public class Inventory extends Widget implements DTarget {
 			if (!wdg.visible || !(wdg instanceof Window) || (wdg == source))
 				continue;
 			Window candidate = (Window) wdg;
+			if (!isStorageWindow(candidate))
+				continue;
 			if (depositing == isPlayerInventoryWindow(candidate))
 				continue;
 			collectInventories(candidate, inventories);
@@ -309,8 +328,14 @@ public class Inventory extends Widget implements DTarget {
 		return (wnd.cap != null) && wnd.cap.text.equals("Inventory");
 	}
 
-	private static boolean isTableWindow(Window wnd) {
-		return (wnd.cap != null) && wnd.cap.text.equals("Table");
+	private static boolean isStorageWindow(Window wnd) {
+		if (wnd.cap == null)
+			return false;
+		String title = wnd.cap.text;
+		return title.equals("Inventory") || title.equals("Cupboard") ||
+				title.equals("Chest") || title.equals("Seedbag") ||
+				title.equals("Barrel") || title.equals("Crate") ||
+				title.equals("Basket");
 	}
 
 	private boolean needshift() {
@@ -336,8 +361,16 @@ public class Inventory extends Widget implements DTarget {
 			transferPresent.c = new Coord(0,
 					transferAll.c.y + transferAll.sz.y + 3);
 			transferPresent.sz.x = transferAll.sz.x;
-			sz = new Coord(transferPresent.sz.x,
-					transferPresent.c.y + transferPresent.sz.y);
+			if (sortButton != null) {
+				sortButton.c = new Coord(0,
+						transferPresent.c.y + transferPresent.sz.y + 3);
+				sortButton.sz.x = transferAll.sz.x;
+				sz = new Coord(sortButton.sz.x,
+						sortButton.c.y + sortButton.sz.y);
+			} else {
+				sz = new Coord(transferPresent.sz.x,
+						transferPresent.c.y + transferPresent.sz.y);
+			}
 		}
 		if ((trash != null) && (trash.visible)) {
 			trash.c = sz.sub(0, invSqSize.y);

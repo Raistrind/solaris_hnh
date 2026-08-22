@@ -228,6 +228,8 @@ public class OptWnd extends Window {
 	    (new CheckBox(new Coord(220, 270), tab, "Save Minimaps") {
 		public void changed(boolean val) {
 		    Config.autoSaveMinimaps = val;
+		    if (val)
+			MiniMap.enableMapSaving();
 		    Config.saveOptions();
 		}
 	    }).a = Config.autoSaveMinimaps;
