@@ -704,7 +704,7 @@ public class CharWnd extends Window {
 		Label attlbl, lplabel, lphourlbl, lpattlbl;
 		Window wnd;
 		boolean svis, attached = true;
-		private Coord detsz = new Coord(110, 150);
+		private Coord detsz = new Coord(110, 210);
 		private Coord detc = new Coord(-145, -75);
 		int attlimit, attused = 0;
 		long studylp;

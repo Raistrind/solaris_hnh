@@ -189,7 +189,19 @@ public class Window extends Widget implements DTarget {
 			wsz.y = wsz.y / 2;
 		asz = wsz.sub(wbox.bl.sz()).sub(wbox.br.sz()).sub(mrgn.mul(2));
 	}
-	
+
+	public void growToFit(Widget wdg) {
+		Coord br = wdg.c.add(wdg.sz);
+		if ((br.x <= ssz.x) && (br.y <= ssz.y))
+			return;
+		ssz = new Coord(Math.max(ssz.x, br.x), Math.max(ssz.y, br.y));
+		Coord visibleSize = new Coord(ssz);
+		if (folded)
+			visibleSize.y = 0;
+		recalcsz(visibleSize);
+		placecbtn();
+	}
+
 	public void recalcSize(Coord size){
 		sz = size;
 		ssz = sz;

@@ -29,7 +29,9 @@ package haven;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class Inventory extends Widget implements DTarget {
@@ -42,6 +44,8 @@ public class Inventory extends Widget implements DTarget {
 			Resource.loadimg("gfx/hud/trashh") };
 	Coord isz;
 	private final IButton trash;
+	private final Button transferAll;
+	private final Button transferPresent;
 	private final AtomicBoolean wait = new AtomicBoolean(false);
 
 	static {
@@ -72,6 +76,26 @@ public class Inventory extends Widget implements DTarget {
 	public Inventory(Coord c, Coord sz, Widget parent) {
 		super(c, invSqSizeSubOne.mul(sz).add(new Coord(17, 1)), parent);
 		isz = sz;
+		if ((parent instanceof Window) &&
+				!isTableWindow((Window) parent)) {
+			Window wnd = (Window) parent;
+			boolean playerInventory = isPlayerInventoryWindow(wnd);
+			transferAll = new Button(Coord.z, 110, this,
+					playerInventory ? "Deposit All" : "Take All") {
+				public void click() {
+					transferAllItems();
+				}
+			};
+			transferPresent = new Button(Coord.z, 110, this,
+					playerInventory ? "Deposit If Present" : "Take If Present") {
+				public void click() {
+					transferPresentItems();
+				}
+			};
+		} else {
+			transferAll = null;
+			transferPresent = null;
+		}
 
 		// removed trash can from inventory -trev
 		/*
@@ -212,6 +236,83 @@ public class Inventory extends Widget implements DTarget {
 		}
 	}
 
+	private void transferAllItems() {
+		List<Item> items = new ArrayList<Item>();
+		for (Widget wdg = lchild; wdg != null; wdg = wdg.prev) {
+			if (wdg.visible && wdg instanceof Item)
+				items.add((Item) wdg);
+		}
+		for (Item item : items)
+			item.wdgmsg("transfer", Coord.z);
+	}
+
+	private void transferPresentItems() {
+		Set<String> present = new HashSet<String>();
+		for (Inventory inventory : destinationInventories()) {
+			for (Widget wdg = inventory.lchild; wdg != null; wdg = wdg.prev) {
+				if (wdg.visible && wdg instanceof Item) {
+					String resourceName = ((Item) wdg).GetResName();
+					if (resourceName != null)
+						present.add(resourceName);
+				}
+			}
+		}
+		if (present.isEmpty())
+			return;
+
+		List<Item> items = new ArrayList<Item>();
+		for (Widget wdg = lchild; wdg != null; wdg = wdg.prev) {
+			if (wdg.visible && wdg instanceof Item) {
+				Item item = (Item) wdg;
+				String resourceName = item.GetResName();
+				if ((resourceName != null) && present.contains(resourceName))
+					items.add(item);
+			}
+		}
+		for (Item item : items)
+			item.wdgmsg("transfer", Coord.z);
+	}
+
+	private List<Inventory> destinationInventories() {
+		List<Inventory> inventories = new ArrayList<Inventory>();
+		if (!(parent instanceof Window))
+			return inventories;
+
+		Window source = (Window) parent;
+		Widget desktop = source.parent;
+		if (desktop == null)
+			return inventories;
+
+		boolean depositing = isPlayerInventoryWindow(source);
+		for (Widget wdg = desktop.lchild; wdg != null; wdg = wdg.prev) {
+			if (!wdg.visible || !(wdg instanceof Window) || (wdg == source))
+				continue;
+			Window candidate = (Window) wdg;
+			if (depositing == isPlayerInventoryWindow(candidate))
+				continue;
+			collectInventories(candidate, inventories);
+			if (!inventories.isEmpty())
+				break;
+		}
+		return inventories;
+	}
+
+	private static void collectInventories(Window wnd,
+			List<Inventory> inventories) {
+		for (Widget wdg = wnd.child; wdg != null; wdg = wdg.next) {
+			if (wdg.visible && wdg instanceof Inventory)
+				inventories.add((Inventory) wdg);
+		}
+	}
+
+	private static boolean isPlayerInventoryWindow(Window wnd) {
+		return (wnd.cap != null) && wnd.cap.text.equals("Inventory");
+	}
+
+	private static boolean isTableWindow(Window wnd) {
+		return (wnd.cap != null) && wnd.cap.text.equals("Table");
+	}
+
 	private boolean needshift() {
 		if (parent instanceof Window) {
 			Window wnd = (Window) parent;
@@ -227,7 +328,17 @@ public class Inventory extends Widget implements DTarget {
 	}
 
 	private void recalcsz() {
-		sz = invSqSizeSubOne.mul(isz).add(new Coord(1, 1));
+		Coord gridsz = invSqSizeSubOne.mul(isz).add(new Coord(1, 1));
+		sz = gridsz;
+		if (transferAll != null) {
+			transferAll.c = new Coord(0, gridsz.y + 3);
+			transferAll.sz.x = Math.max(110, gridsz.x);
+			transferPresent.c = new Coord(0,
+					transferAll.c.y + transferAll.sz.y + 3);
+			transferPresent.sz.x = transferAll.sz.x;
+			sz = new Coord(transferPresent.sz.x,
+					transferPresent.c.y + transferPresent.sz.y);
+		}
 		if ((trash != null) && (trash.visible)) {
 			trash.c = sz.sub(0, invSqSize.y);
 			hsz = sz.add(16, 0);
@@ -239,6 +350,8 @@ public class Inventory extends Widget implements DTarget {
 		} else {
 			hsz = null;
 		}
+		if ((transferAll != null) && (parent instanceof Window))
+			((Window) parent).growToFit(this);
 	}
 
 	protected boolean checkTrashButton(Widget w) {
