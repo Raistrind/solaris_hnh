@@ -243,31 +243,54 @@ public class Config {
 	}
 
 	private static void loadFEP() {
+		FEPMap.clear();
+		File inputFile = new File("fep.conf");
+		if (!inputFile.exists())
+			inputFile = new File("etc/needed/fep.conf");
+		if (!inputFile.exists())
+			return;
+
+		BufferedReader br = null;
 		try {
-			FileInputStream fstream;
-			fstream = new FileInputStream("fep.conf");
-			DataInputStream in = new DataInputStream(fstream);
-			BufferedReader br = new BufferedReader(new InputStreamReader(in));
+			br = new BufferedReader(new InputStreamReader(new FileInputStream(
+					inputFile), "UTF-8"));
 			String strLine;
 			while ((strLine = br.readLine()) != null) {
+				strLine = strLine.trim();
+				if ((strLine.length() == 0) || strLine.startsWith("#"))
+					continue;
+				String[] fields = strLine.split("=", 2);
+				if (fields.length != 2)
+					continue;
 				HashMap<String, Float> fep = new HashMap<String, Float>();
-				String[] tmp = strLine.split("=");
-				String name;
-				name = tmp[0].toLowerCase();
-				tmp = tmp[1].split(" ");
-				for (String itm : tmp) {
-					String tmp2[] = itm.split(":");
-					fep.put(tmp2[0], Float.valueOf(tmp2[1]).floatValue());
+				String name = fields[0].trim().toLowerCase(Locale.ENGLISH);
+				for (String itm : fields[1].trim().split("\\s+")) {
+					String values[] = itm.split(":", 2);
+					if (values.length != 2)
+						continue;
+					String key = values[0].trim();
+					if (key.equalsIgnoreCase("isItem"))
+						key = "isItem";
+					else
+						key = key.toUpperCase(Locale.ENGLISH);
+					try {
+						fep.put(key, Float.valueOf(values[1]).floatValue());
+					} catch (NumberFormatException e) {
+					}
 				}
-				FEPMap.put(name, fep);
+				if ((name.length() > 0) && !fep.isEmpty())
+					FEPMap.put(name, fep);
 			}
-			br.close();
-			in.close();
-			fstream.close();
-		} catch (FileNotFoundException e) {
 		} catch (IOException e) {
+			System.out.println(e);
+		} finally {
+			if (br != null) {
+				try {
+					br.close();
+				} catch (IOException e) {
+				}
+			}
 		}
-
 	}
 
 	public static String mksmiley(String str) {

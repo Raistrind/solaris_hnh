@@ -28,15 +28,21 @@ package haven;
 
 import java.awt.Color;
 import java.awt.image.BufferedImage;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class Item extends Widget implements DTarget {
 	static Coord shoff = new Coord(1, 3);
-	static final Pattern patt = Pattern.compile("quality (\\d+) ",
+	static final Pattern patt = Pattern.compile("\\bquality\\s+(\\d+)",
 			Pattern.CASE_INSENSITIVE);
 	static final Pattern pattVal = Pattern.compile("\\(([0-9.]+)/([0-9.]+)",
 			Pattern.CASE_INSENSITIVE);
@@ -161,6 +167,8 @@ public class Item extends Widget implements DTarget {
 				System.out.println(e.getMessage());
 			}
 		}
+		updateQualityMultiplier();
+		invalidateFEP();
 	}
 
 	private void fixsize() {
@@ -311,54 +319,92 @@ public class Item extends Widget implements DTarget {
 	}
 
 	public double qmult;
-	private String FEP = null;
+	private static final String[] FEP_ORDER = { "STR", "AGI", "INT",
+			"CON", "PER", "CHA", "DEX", "PSY", "HHP", "HUNGER" };
+	private String fepTip = null;
+	private boolean fepDirty = true;
 
-	private void calcFEP() {
-		Map<String, Float> fep;
-		String name = name();
-		double weapon = 1;
-		if(name == null){return;}
-		if(name.equals("Ring of Brodgar")){
-			if(res.get().name.equals("gfx/invobjs/bread-brodgar")){name = "Ring of Brodgar (Baking)";}
-			if(res.get().name.equals("gfx/invobjs/feast-rob")){name = "Ring of Brodgar (Seafood)";}
+	static double qualityMultiplier(int quality) {
+		return (quality > 0) ? Math.sqrt((double) quality / 10.0) : 0.0;
+	}
+
+	private void updateQualityMultiplier() {
+		qmult = qualityMultiplier(get_quality());
+	}
+
+	private String fepName() {
+		Resource resource = res.get();
+		if (resource == null)
+			return null;
+		Resource.Tooltip tooltipLayer = resource.layer(Resource.tooltip);
+		if (tooltipLayer == null)
+			return null;
+		String itemName = tooltipLayer.t;
+		if (itemName == null)
+			return null;
+		if (itemName.equals("Ring of Brodgar")) {
+			if (resource.name.equals("gfx/invobjs/bread-brodgar"))
+				itemName = "Ring of Brodgar (Baking)";
+			else if (resource.name.equals("gfx/invobjs/feast-rob"))
+				itemName = "Ring of Brodgar (Seafood)";
 		}
+		return itemName.trim().toLowerCase(Locale.ENGLISH);
+	}
 
-		name = name.toLowerCase();
-		boolean isItem = false;
-		if((fep = Config.FEPMap.get(name)) != null){
-			if(fep.containsKey("isItem")){
-				isItem = true;
-			}
-			FEP = "\n";
-			for(String key:fep.keySet()){
-				double k = fep.get(key);
-				float val = (float)(k*qmult);
-				boolean hunger = false;
-				if(key.equals("HUNGER")){
-					val = fep.get(key);
-					hunger = true;
-				}
-				if(key.equals("isItem")){continue;}
+	private static void appendFEPValue(StringBuilder buf, String key,
+			Map<String, Float> fep, double multiplier, boolean wholeValues,
+			Set<String> added) {
+		Float base = fep.get(key);
+		if (base == null)
+			return;
+		double value = key.equals("HUNGER") ? base.doubleValue()
+				: base.doubleValue() * multiplier;
+		if (added.size() > 0)
+			buf.append(", ");
+		if (wholeValues || key.equals("HUNGER"))
+			buf.append(String.format(Locale.US, "%s %.0f", key,
+					Math.floor(value)));
+		else
+			buf.append(String.format(Locale.US, "%s %.1f", key, value));
+		added.add(key);
+	}
 
-				if(name.contains("sword") || name.contains("axe")){
-					int str = ui.sess.glob.cattr.get("str").comp;
-					double marsh = 1 + (((double)ui.sess.glob.cattr.get("martial").comp * 4) / 100);
-					weapon = Math.sqrt(Math.sqrt((double)quality * (double)str)/10) * marsh;
-					val = (float)(weapon * k);
-				}else if(name.contains("bow") || name.contains("sling")){
-					double marsh = 1 + (((double)ui.sess.glob.cattr.get("martial").comp * 4) / 100);
-					val = (float)(marsh * val);
-				}
+	static String formatFEP(Map<String, Float> fep, double multiplier) {
+		if ((fep == null) || (multiplier <= 0))
+			return null;
+		boolean wholeValues = fep.containsKey("isItem");
+		StringBuilder buf = new StringBuilder("\nFEP: ");
+		Set<String> added = new HashSet<String>();
+		for (String key : FEP_ORDER)
+			appendFEPValue(buf, key, fep, multiplier, wholeValues, added);
 
-				if(isItem || hunger){
-					val = (float) Math.floor(val);
-					FEP += String.format("%s:%.0f ", key, val);
-				} else {
-					FEP += String.format("%s:%.1f ", key, val);
-				}
-			}
-			shorttip = longtip = null;
+		List<String> extra = new ArrayList<String>();
+		for (String key : fep.keySet()) {
+			if (!key.equals("isItem") && !added.contains(key))
+				extra.add(key);
 		}
+		Collections.sort(extra);
+		for (String key : extra)
+			appendFEPValue(buf, key, fep, multiplier, wholeValues, added);
+		return added.isEmpty() ? null : buf.toString();
+	}
+
+	private void invalidateFEP() {
+		fepTip = null;
+		fepDirty = true;
+		resettt();
+	}
+
+	private void ensureFEP() {
+		if (!fepDirty)
+			return;
+		String itemName = fepName();
+		if (itemName == null)
+			return;
+		updateQualityMultiplier();
+		fepTip = formatFEP(Config.FEPMap.get(itemName), qmult);
+		fepDirty = false;
+		resettt();
 	}
 
 	public String shorttip() {
@@ -383,6 +429,7 @@ public class Item extends Widget implements DTarget {
 	Text shorttip = null, longtip = null;
 
 	public Object tooltip(Coord c, boolean again) {
+		ensureFEP();
 		long now = System.currentTimeMillis();
 		if(!again)
 			hoverstart = now;
@@ -396,8 +443,8 @@ public class Item extends Widget implements DTarget {
 					if(meter > 0) {
 						tt = tt + " (" + meter + "%)";
 					}
-					if(FEP != null){
-						tt += FEP;
+					if(fepTip != null){
+						tt += fepTip;
 					}
 					if(curioStr != null){
 						tt += curioStr;
@@ -415,8 +462,8 @@ public class Item extends Widget implements DTarget {
 				if(meter > 0) {
 					tt = tt + " (" + meter + "%)";
 				}
-				if(FEP != null){
-					tt += FEP;
+				if(fepTip != null){
+					tt += fepTip;
 				}
 				if(curioStr != null){
 					tt += curioStr;
@@ -439,14 +486,15 @@ public class Item extends Widget implements DTarget {
 	}
 
 	private String shrtTip() {
+		ensureFEP();
 		String tt = shorttip();
 		if (tt != null) {
 			tt = RichText.Parser.quote(tt);
 			if (meter > 0) {
 				tt = tt + " (" + meter + "%)";
 			}
-			if (FEP != null) {
-				tt += FEP;
+			if (fepTip != null) {
+				tt += fepTip;
 			}
 			if (curio_stat != null && qmult > 0) {
 				if(UI.instance.wnd_char != null)
@@ -483,6 +531,8 @@ public class Item extends Widget implements DTarget {
 			this.quality = (q & 0xffffff);
 			hq = ((fl & 1) != 0);
 		}
+		updateQualityMultiplier();
+		invalidateFEP();
 	}
 
 	public Config.CuriosityStat curio_stat = null;
@@ -502,8 +552,6 @@ public class Item extends Widget implements DTarget {
 			ui.grabmouse(this);
 			this.c = ui.mc.add(doff.inv());
 		}
-		qmult = Math.sqrt((double) q / 10);
-		calcFEP();
 		if (curio_stat == null && name() != null && Config.CurioMap.get(name()) != null) {
 			curio_stat = Config.CurioMap.get(name());
 		}
