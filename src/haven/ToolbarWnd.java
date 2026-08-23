@@ -36,6 +36,10 @@ public class ToolbarWnd extends Window implements DTarget, DropTarget {
 	private static Tex[] beltNums;
 	public String name;
 
+	protected boolean shouldKeepOnScreen() {
+		return false;
+	}
+
 	public final static RichText.Foundry ttfnd = new RichText.Foundry(
 			TextAttribute.FAMILY, "SansSerif", TextAttribute.SIZE, 10);
 

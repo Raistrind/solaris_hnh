@@ -81,8 +81,14 @@ public class Config {
 	public static Properties options, window_props;
 	public static int sfxVol;
 	public static int musicVol;
-	public static int uiScale = 1;
-	private static int activeUIScale = 1;
+	private static final int activeUIScale = 1;
+	public static int windowScale = 100;
+	public static int hudScale = 100;
+	public static int chatScale = 100;
+	public static int clockScale = 100;
+	public static int minimapScale = 100;
+	public static int contextScale = 100;
+	public static int helperScale = 100;
 	public static boolean isMusicOn = false;
 	public static boolean isSoundOn = true;
 	public static boolean showRadius = true;
@@ -201,7 +207,6 @@ public class Config {
 			window_props = new Properties();
 			hideObjectList = Collections.synchronizedSet(new HashSet<String>());
 			loadOptions();
-			activeUIScale = uiScale;
 			loadWindowOptions();
 			loadSmileys();
 			loadFEP();
@@ -474,7 +479,15 @@ public class Config {
 		} catch (IOException e) {
 			System.out.println(e);
 		}
-		uiScale = parseUIScale(options.getProperty("uiScale", "1"));
+		windowScale = parseElementScale(options.getProperty("windowScale", "100"));
+		hudScale = parseElementScale(options.getProperty("hudScale", "100"));
+		chatScale = parseElementScale(options.getProperty("chatScale", "100"));
+		clockScale = parseElementScale(options.getProperty("clockScale", "100"));
+		minimapScale = parseElementScale(options.getProperty("minimapScale",
+				"100"));
+		contextScale = parseElementScale(options.getProperty("contextScale",
+				"100"));
+		helperScale = parseElementScale(options.getProperty("helperScale", "100"));
 		explanationLevel = parseExplanationLevel(options.getProperty(
 				"explanationLevel", "1"));
 		String hideObjects = options.getProperty("hideObjects", "");
@@ -588,14 +601,6 @@ public class Config {
 		}
 	}
 
-	private static int parseUIScale(String value) {
-		try {
-			return validateUIScale(Integer.parseInt(value));
-		} catch (NumberFormatException e) {
-			return 1;
-		}
-	}
-
 	private static int parseExplanationLevel(String value) {
 		try {
 			return validateExplanationLevel(Integer.parseInt(value));
@@ -604,21 +609,31 @@ public class Config {
 		}
 	}
 
-	public static int validateUIScale(int value) {
-		return ((value >= 1) && (value <= 3)) ? value : 1;
+	private static int parseElementScale(String value) {
+		try {
+			return validateElementScale(Integer.parseInt(value));
+		} catch (NumberFormatException e) {
+			return 100;
+		}
 	}
 
 	public static int validateExplanationLevel(int value) {
 		return Math.max(0, Math.min(2, value));
 	}
 
-	public static int getActiveUIScale() {
-		return activeUIScale;
+	public static int validateElementScale(int value) {
+		if ((value == 50) || (value == 75) || (value == 100) ||
+				(value == 125) || (value == 150) || (value == 175))
+			return value;
+		return 100;
 	}
 
-	public static void setUIScale(int value) {
-		uiScale = validateUIScale(value);
-		saveOptions();
+	public static double elementScale(int value) {
+		return validateElementScale(value) / 100.0;
+	}
+
+	public static int getActiveUIScale() {
+		return activeUIScale;
 	}
 
 	public static synchronized void setWindowOpt(String key, String value) {
@@ -667,8 +682,23 @@ public class Config {
 
 		options.setProperty("hcolor", scolor);
 		options.setProperty("uicolor", ucolor);
-		uiScale = validateUIScale(uiScale);
-		options.setProperty("uiScale", String.valueOf(uiScale));
+		/* Migrate any legacy whole-client 2x/3x setting back to the stable
+		 * native coordinate space.  Element-specific scaling remains available. */
+		options.setProperty("uiScale", "1");
+		windowScale = validateElementScale(windowScale);
+		hudScale = validateElementScale(hudScale);
+		chatScale = validateElementScale(chatScale);
+		clockScale = validateElementScale(clockScale);
+		minimapScale = validateElementScale(minimapScale);
+		contextScale = validateElementScale(contextScale);
+		helperScale = validateElementScale(helperScale);
+		options.setProperty("windowScale", String.valueOf(windowScale));
+		options.setProperty("hudScale", String.valueOf(hudScale));
+		options.setProperty("chatScale", String.valueOf(chatScale));
+		options.setProperty("clockScale", String.valueOf(clockScale));
+		options.setProperty("minimapScale", String.valueOf(minimapScale));
+		options.setProperty("contextScale", String.valueOf(contextScale));
+		options.setProperty("helperScale", String.valueOf(helperScale));
 		explanationLevel = validateExplanationLevel(explanationLevel);
 		options.setProperty("explanationLevel", String.valueOf(explanationLevel));
 		options.setProperty("hideObjects", hideObjects);

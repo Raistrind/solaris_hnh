@@ -325,17 +325,24 @@ public class HavenPanel extends GLCanvas implements Runnable {
 		}
 		if (tt != null) {
 			Coord sz = tt.sz();
-			Coord pos = mousepos.add(sz.inv());
-			if (pos.x < 0)
-				pos.x = 0;
-			if (pos.y < 0)
-				pos.y = 0;
-			g.chcolor(244, 247, 21, 192);
-			g.rect(pos.add(-3, -3), sz.add(6, 6));
-			g.chcolor(35, 35, 35, 192);
-			g.frect(pos.add(-2, -2), sz.add(4, 4));
-			g.chcolor();
-			g.image(tt, pos);
+			double desiredScale = Config.elementScale(Config.contextScale);
+			double fitScale = Math.min((logicalSize.x - 6) / (double) sz.x,
+					(logicalSize.y - 6) / (double) sz.y);
+			double scale = Math.max(0.1, Math.min(desiredScale, fitScale));
+			Coord displaySize = Widget.scaleSize(sz, scale);
+			int border = (int) Math.ceil(3 * scale);
+			Coord pos = mousepos.add(displaySize.inv());
+			pos.x = Math.max(border, Math.min(pos.x,
+					logicalSize.x - displaySize.x - border));
+			pos.y = Math.max(border, Math.min(pos.y,
+					logicalSize.y - displaySize.y - border));
+			GOut tooltipGraphics = g.scaled(scale, pos);
+			tooltipGraphics.chcolor(244, 247, 21, 192);
+			tooltipGraphics.rect(pos.add(-3, -3), sz.add(6, 6));
+			tooltipGraphics.chcolor(35, 35, 35, 192);
+			tooltipGraphics.frect(pos.add(-2, -2), sz.add(4, 4));
+			tooltipGraphics.chcolor();
+			tt.render(tooltipGraphics, pos);
 		}
 		Resource curs = ui.root.getcurs(mousepos);
 		if (!curs.loading) {

@@ -144,10 +144,78 @@ public class Widget {
 		return (c);
 	}
 
-	public Coord rootpos() {
+	/** Scale applied to this widget and all of its descendants. */
+	public double getDisplayScale() {
+		return 1.0;
+	}
+
+	public Coord getDisplaySize() {
+		return scaleSize(sz, getDisplayScale());
+	}
+
+	/** Returns true when this widget or one of its parents changes display scale. */
+	public boolean hasDisplayScaling() {
+		for (Widget widget = this; widget != null; widget = widget.parent) {
+			if (widget.getDisplayScale() != 1.0)
+				return true;
+		}
+		return false;
+	}
+
+	/** True when scaling can make this widget's saved position leave the screen. */
+	protected boolean needsScaledBoundsCheck() {
+		return (Config.getActiveUIScale() != 1) || (getDisplayScale() != 1.0);
+	}
+
+	/** Limit a requested element scale so its unscaled bounds fit its parent. */
+	protected double fitDisplayScale(double desired, Coord bounds) {
+		if ((parent == null) || (parent.sz.x < 1) || (parent.sz.y < 1)
+				|| (bounds.x < 1) || (bounds.y < 1))
+			return desired;
+		double horizontal = parent.sz.x / (double) bounds.x;
+		double vertical = parent.sz.y / (double) bounds.y;
+		return Math.min(desired, Math.min(horizontal, vertical));
+	}
+
+	public static Coord scaleSize(Coord value, double scale) {
+		return new Coord((int) Math.ceil(value.x * scale), (int) Math.ceil(value.y
+				* scale));
+	}
+
+	protected Coord localToParent(Coord value) {
+		double scale = getDisplayScale();
+		return new Coord((int) Math.round(value.x * scale), (int) Math.round(value.y
+				* scale));
+	}
+
+	protected Coord parentToLocal(Coord value) {
+		double scale = getDisplayScale();
+		return new Coord((int) Math.floor(value.x / scale), (int) Math.floor(value.y
+				/ scale));
+	}
+
+	public Coord outerToRoot(Coord outer) {
+		Coord scaled = localToParent(outer);
 		if (parent == null)
-			return (new Coord(0, 0));
-		return (xlate(parent.rootpos().add(c), true));
+			return scaled;
+		return parent.outerToRoot(parent.xlate(c, true).add(scaled));
+	}
+
+	public Coord rootToOuter(Coord root) {
+		if (parent == null)
+			return parentToLocal(root);
+		Coord inParent = parent.rootToOuter(root);
+		return parentToLocal(inParent.sub(parent.xlate(c, true)));
+	}
+
+	public Coord rootpos() {
+		/* Preserve the legacy coordinate path exactly for the normal 100% case. */
+		if (!hasDisplayScaling()) {
+			if (parent == null)
+				return new Coord(0, 0);
+			return xlate(parent.rootpos().add(c), true);
+		}
+		return outerToRoot(xlate(Coord.z, true));
 	}
 
 	public boolean hasparent(Widget w2) {
@@ -301,8 +369,31 @@ public class Widget {
 			if (!wdg.visible || (!ui.root.visible && wdg.isui))
 				continue;
 			Coord cc = xlate(wdg.c, true);
-			wdg.draw(g.reclip(cc, wdg.sz));
+			drawChild(g, wdg, cc);
 		}
+	}
+
+	private void drawChild(GOut g, Widget child, Coord childPosition) {
+		double scale = child.getDisplayScale();
+		if (scale == 1.0) {
+			child.draw(g.reclip(childPosition, child.sz));
+			return;
+		}
+		/* Scale submitted vertices while retaining logical clipping coordinates. */
+		Coord origin = g.ul.add(childPosition);
+		GOut childGraphics = g.reclip(childPosition, child.sz).scaled(scale,
+				origin);
+		child.draw(childGraphics);
+	}
+
+	private static Coord hitSize(Widget widget) {
+		Coord size = (widget.hsz == null) ? widget.sz : widget.hsz;
+		return scaleSize(size, widget.getDisplayScale());
+	}
+
+	private static Coord childPoint(Coord point, Coord childPosition,
+			Widget child) {
+		return child.parentToLocal(point.sub(childPosition));
 	}
 
 	public boolean mousedown(Coord c, int button) {
@@ -310,8 +401,14 @@ public class Widget {
 			if (!wdg.visible)
 				continue;
 			Coord cc = xlate(wdg.c, true);
-			if (c.isect(cc, (wdg.hsz == null) ? wdg.sz : wdg.hsz)) {
-				if (wdg.mousedown(c.add(cc.inv()), button)) {
+			if (wdg.getDisplayScale() == 1.0) {
+				if (c.isect(cc, (wdg.hsz == null) ? wdg.sz : wdg.hsz)
+						&& wdg.mousedown(c.add(cc.inv()), button))
+					return true;
+				continue;
+			}
+			if (c.isect(cc, hitSize(wdg))) {
+				if (wdg.mousedown(childPoint(c, cc, wdg), button)) {
 					return (true);
 				}
 			}
@@ -324,8 +421,14 @@ public class Widget {
 			if (!wdg.visible)
 				continue;
 			Coord cc = xlate(wdg.c, true);
-			if (c.isect(cc, (wdg.hsz == null) ? wdg.sz : wdg.hsz)) {
-				if (wdg.mouseup(c.add(cc.inv()), button)) {
+			if (wdg.getDisplayScale() == 1.0) {
+				if (c.isect(cc, (wdg.hsz == null) ? wdg.sz : wdg.hsz)
+						&& wdg.mouseup(c.add(cc.inv()), button))
+					return true;
+				continue;
+			}
+			if (c.isect(cc, hitSize(wdg))) {
+				if (wdg.mouseup(childPoint(c, cc, wdg), button)) {
 					return (true);
 				}
 			}
@@ -338,8 +441,14 @@ public class Widget {
 			if (!wdg.visible)
 				continue;
 			Coord cc = xlate(wdg.c, true);
-			if (c.isect(cc, (wdg.hsz == null) ? wdg.sz : wdg.hsz)) {
-				if (wdg.mousewheel(c.add(cc.inv()), amount)) {
+			if (wdg.getDisplayScale() == 1.0) {
+				if (c.isect(cc, (wdg.hsz == null) ? wdg.sz : wdg.hsz)
+						&& wdg.mousewheel(c.add(cc.inv()), amount))
+					return true;
+				continue;
+			}
+			if (c.isect(cc, hitSize(wdg))) {
+				if (wdg.mousewheel(childPoint(c, cc, wdg), amount)) {
 					return (true);
 				}
 			}
@@ -352,7 +461,10 @@ public class Widget {
 			if (!wdg.visible)
 				continue;
 			Coord cc = xlate(wdg.c, true);
-			wdg.mousemove(c.add(cc.inv()));
+			if (wdg.getDisplayScale() == 1.0)
+				wdg.mousemove(c.add(cc.inv()));
+			else
+				wdg.mousemove(childPoint(c, cc, wdg));
 		}
 	}
 
@@ -474,9 +586,15 @@ public class Widget {
 			if (!wdg.visible)
 				continue;
 			Coord cc = xlate(wdg.c, true);
-			Coord hitSize = (wdg.hsz == null) ? wdg.sz : wdg.hsz;
-			if (c.isect(cc, hitSize)) {
-				if ((ret = wdg.getcurs(c.add(cc.inv()))) != null)
+			if (wdg.getDisplayScale() == 1.0) {
+				Coord size = (wdg.hsz == null) ? wdg.sz : wdg.hsz;
+				if (c.isect(cc, size)
+						&& ((ret = wdg.getcurs(c.add(cc.inv()))) != null))
+					return ret;
+				continue;
+			}
+			if (c.isect(cc, hitSize(wdg))) {
+				if ((ret = wdg.getcurs(childPoint(c, cc, wdg))) != null)
 					return (ret);
 			}
 		}
@@ -492,9 +610,20 @@ public class Widget {
 			if (!wdg.visible)
 				continue;
 			Coord cc = xlate(wdg.c, true);
-			Coord hitSize = (wdg.hsz == null) ? wdg.sz : wdg.hsz;
-			if (c.isect(cc, hitSize)) {
-				Object ret = wdg.tooltip(c.add(cc.inv()), again
+			if (wdg.getDisplayScale() == 1.0) {
+				Coord size = (wdg.hsz == null) ? wdg.sz : wdg.hsz;
+				if (c.isect(cc, size)) {
+					Object ret = wdg.tooltip(c.add(cc.inv()), again
+							&& (wdg == prevtt));
+					if (ret != null) {
+						prevtt = wdg;
+						return ret;
+					}
+				}
+				continue;
+			}
+			if (c.isect(cc, hitSize(wdg))) {
+				Object ret = wdg.tooltip(childPoint(c, cc, wdg), again
 						&& (wdg == prevtt));
 				if (ret != null) {
 					prevtt = wdg;

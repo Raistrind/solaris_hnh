@@ -46,7 +46,10 @@ public class Label extends Widget {
     }
 	
     public void draw(GOut g) {
-	g.image(text.tex(), Coord.z);
+	/* Labels have texture-sized bounds; draw directly so rounding at a
+	 * fractional parent scale cannot clip the outer glyph row. */
+	text.tex().render(g, g.ul);
+	GOut.checkerr(g.gl);
     }
 	
     public Label(Coord c, Widget parent, String text, int w, Text.Foundry f) {

@@ -1018,18 +1018,24 @@ public final class Specialization {
 		pathText = shorten(pathText, 46);
 		goalText = shorten(goalText, 48);
 		Coord size = new Coord(330, 58);
-		Coord origin = new Coord(Math.max(5, screenSize.x - size.x - 8), 8);
-		g.chcolor(new Color(0, 0, 0, 190));
-		g.frect(origin, size);
-		g.chcolor(new Color(235, 195, 75, 230));
-		g.rect(origin, size);
-		g.atext("Path: " + pathText, origin.add(8, 14), 0, 0.5);
-		g.chcolor(Color.WHITE);
-		g.atext("Next: " + goalText, origin.add(8, 32), 0, 0.5);
-		g.chcolor(new Color(170, 205, 240));
-		g.atext("Progress: " + progress[0] + "/" + progress[1]
-				+ "   Ctrl+Shift+P: planner", origin.add(8, 49), 0, 0.5);
-		g.chcolor();
+		double desiredScale = Config.elementScale(Config.helperScale);
+		double fitScale = Math.min((screenSize.x - 10) / (double) size.x,
+				(screenSize.y - 10) / (double) size.y);
+		double scale = Math.max(0.1, Math.min(desiredScale, fitScale));
+		Coord displaySize = Widget.scaleSize(size, scale);
+		Coord origin = new Coord(Math.max(5, screenSize.x - displaySize.x - 8), 8);
+		GOut overlayGraphics = g.reclip(origin, size).scaled(scale, origin);
+		overlayGraphics.chcolor(new Color(0, 0, 0, 190));
+		overlayGraphics.frect(Coord.z, size);
+		overlayGraphics.chcolor(new Color(235, 195, 75, 230));
+		overlayGraphics.rect(Coord.z, size);
+		overlayGraphics.atext("Path: " + pathText, new Coord(8, 14), 0, 0.5);
+		overlayGraphics.chcolor(Color.WHITE);
+		overlayGraphics.atext("Next: " + goalText, new Coord(8, 32), 0, 0.5);
+		overlayGraphics.chcolor(new Color(170, 205, 240));
+		overlayGraphics.atext("Progress: " + progress[0] + "/" + progress[1]
+				+ "   Ctrl+Shift+P: planner", new Coord(8, 49), 0, 0.5);
+		overlayGraphics.chcolor();
 	}
 
 	public static synchronized List<KnowledgeBase.Document> documents(

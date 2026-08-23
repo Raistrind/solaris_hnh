@@ -41,25 +41,31 @@ public final class HotkeyOverlay {
 		if (!visible())
 			return;
 		Coord size = new Coord(450, 42 + (HOTKEYS.length * 18));
-		Coord origin = screenSize.sub(size).div(2);
-		g.chcolor(new Color(0, 0, 0, 225));
-		g.frect(origin, size);
-		g.chcolor(new Color(125, 175, 230, 255));
-		g.rect(origin, size);
-		g.chcolor();
-		g.atext("Solaris Hotkeys", origin.add(size.x / 2, 18), 0.5, 0.5);
+		double desiredScale = Config.elementScale(Config.helperScale);
+		double fitScale = Math.min((screenSize.x - 10) / (double) size.x,
+				(screenSize.y - 10) / (double) size.y);
+		double scale = Math.max(0.1, Math.min(desiredScale, fitScale));
+		Coord displaySize = Widget.scaleSize(size, scale);
+		Coord origin = screenSize.sub(displaySize).div(2);
+		GOut overlayGraphics = g.reclip(origin, size).scaled(scale, origin);
+		overlayGraphics.chcolor(new Color(0, 0, 0, 225));
+		overlayGraphics.frect(Coord.z, size);
+		overlayGraphics.chcolor(new Color(125, 175, 230, 255));
+		overlayGraphics.rect(Coord.z, size);
+		overlayGraphics.chcolor();
+		overlayGraphics.atext("Solaris Hotkeys", new Coord(size.x / 2, 18), 0.5, 0.5);
 		for (int i = 0; i < HOTKEYS.length; i++) {
-			int y = origin.y + 40 + (i * 18);
-			g.chcolor(new Color(160, 205, 255));
-			g.atext(HOTKEYS[i][0], new Coord(origin.x + 12, y), 0, 0.5);
-			g.chcolor(new Color(255, 220, 120));
-			g.atext(HOTKEYS[i][1], new Coord(origin.x + 92, y), 0, 0.5);
-			g.chcolor(Color.WHITE);
-			g.atext(HOTKEYS[i][2], new Coord(origin.x + 225, y), 0, 0.5);
+			int y = 40 + (i * 18);
+			overlayGraphics.chcolor(new Color(160, 205, 255));
+			overlayGraphics.atext(HOTKEYS[i][0], new Coord(12, y), 0, 0.5);
+			overlayGraphics.chcolor(new Color(255, 220, 120));
+			overlayGraphics.atext(HOTKEYS[i][1], new Coord(92, y), 0, 0.5);
+			overlayGraphics.chcolor(Color.WHITE);
+			overlayGraphics.atext(HOTKEYS[i][2], new Coord(225, y), 0, 0.5);
 		}
-		g.chcolor(new Color(170, 170, 170));
-		g.atext("Ctrl+Shift+F1 or Escape to close", origin.add(size.x / 2,
-				size.y - 9), 0.5, 0.5);
-		g.chcolor();
+		overlayGraphics.chcolor(new Color(170, 170, 170));
+		overlayGraphics.atext("Ctrl+Shift+F1 or Escape to close", new Coord(
+				size.x / 2, size.y - 9), 0.5, 0.5);
+		overlayGraphics.chcolor();
 	}
 }

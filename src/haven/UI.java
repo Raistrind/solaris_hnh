@@ -52,6 +52,7 @@ public class UI {
 	public Makewindow make_window;
 	public CharWnd wnd_char;
 	public Fightview fight;
+	private StatusHud statusHud;
 	
 	private Widget keygrab, mousegrab;
 	public Map<Integer, Widget> widgets = new TreeMap<Integer, Widget>();
@@ -140,6 +141,38 @@ public class UI {
 		this.sess = sess;
 	}
 
+	/** Root-level widgets making up the top-left character status display. */
+	private static class StatusHud extends Widget {
+		StatusHud(RootWidget parent) {
+			super(Coord.z, new Coord(parent.sz), parent);
+		}
+
+		public double getDisplayScale() {
+			return Config.elementScale(Config.hudScale);
+		}
+
+		public void update(long dt) {
+			if (parent != null)
+				sz = new Coord(parent.sz);
+			super.update(dt);
+		}
+	}
+
+	private static boolean isStatusWidget(String type) {
+		return type.equals("av") || type.equals("av2") || type.equals("im")
+				|| type.equals("speedget") || type.equals("buffs");
+	}
+
+	private Widget statusParent(Widget requestedParent, String type) {
+		if ((requestedParent != root) || !isStatusWidget(type))
+			return requestedParent;
+		if (statusHud == null)
+			statusHud = new StatusHud(root);
+		else
+			statusHud.raise();
+		return statusHud;
+	}
+
 	public void setreceiver(Receiver rcvr) {
 		this.rcvr = rcvr;
 	}
@@ -168,6 +201,7 @@ public class UI {
 
 	public void newwidget(int id, String type, Coord c, int parent,
 			Object... args) throws InterruptedException {
+		String requestedType = type;
 		WidgetFactory f;
 		if (type.indexOf('/') >= 0) {
 			int ver = -1, p;
@@ -186,6 +220,7 @@ public class UI {
 			if (pwdg == null)
 				throw (new UIException("Null parent widget " + parent + " for "
 						+ id, type, args));
+			pwdg = statusParent(pwdg, requestedType);
 			
 			Widget wdg = f.create(c, pwdg, args);
 			
@@ -317,7 +352,9 @@ public class UI {
 	}
 
 	private Coord wdgxlate(Coord c, Widget wdg) {
-		return (c.add(wdg.c.inv()).add(wdg.parent.rootpos().inv()));
+		if (!wdg.hasDisplayScaling())
+			return (c.add(wdg.c.inv()).add(wdg.parent.rootpos().inv()));
+		return wdg.rootToOuter(c);
 	}
 
 	public boolean dropthing(Widget w, Coord c, Object thing) {
@@ -327,8 +364,16 @@ public class UI {
 		}
 		for (Widget wdg = w.lchild; wdg != null; wdg = wdg.prev) {
 			Coord cc = w.xlate(wdg.c, true);
-			if (c.isect(cc, wdg.sz)) {
-				if (dropthing(wdg, c.add(cc.inv()), thing))
+			if (wdg.getDisplayScale() == 1.0) {
+				if (c.isect(cc, wdg.sz)
+						&& dropthing(wdg, c.add(cc.inv()), thing))
+					return true;
+				continue;
+			}
+			Coord displaySize = Widget.scaleSize(wdg.sz,
+					wdg.getDisplayScale());
+			if (c.isect(cc, displaySize)) {
+				if (dropthing(wdg, wdg.parentToLocal(c.sub(cc)), thing))
 					return (true);
 			}
 		}

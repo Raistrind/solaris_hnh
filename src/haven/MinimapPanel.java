@@ -105,9 +105,14 @@ public class MinimapPanel extends Window {
 		};
 
 		pack();
-		this.c = new Coord( MainFrame.getInnerSize().x - this.sz.x, 7);
+		this.c = new Coord(MainFrame.getInnerSize().x - getDisplaySize().x, 7);
 		loadpos();
 
+	}
+
+	public double getDisplayScale() {
+		return fitDisplayScale(Config.elementScale(Config.minimapScale),
+				(cap == null) ? sz : sz.add(0, 7));
 	}
 
 	private void loadpos(){
@@ -128,7 +133,7 @@ public class MinimapPanel extends Window {
 
 	public void update(long dt) {
 		if (rightAnchored)
-			c.x = MainFrame.getInnerSize().x - sz.x;
+			c.x = MainFrame.getInnerSize().x - getDisplaySize().x;
 		super.update(dt);
 	}
 

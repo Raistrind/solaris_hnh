@@ -92,9 +92,14 @@ public class SlenHud extends ConsoleHost implements DTarget, DropTarget,
 			dy = sz.y;
 		}
 
+		public double getDisplayScale() {
+			return fitDisplayScale(Config.elementScale(Config.hudScale), sz);
+		}
+
 		public void draw(GOut g) {
-			c.x = (MainFrame.innerSize.width - sz.x) / 2;
-			c.y = MainFrame.innerSize.height + dy;
+			double scale = getDisplayScale();
+			c.x = (MainFrame.innerSize.width - getDisplaySize().x) / 2;
+			c.y = MainFrame.innerSize.height + (int) Math.round(dy * scale);
 			super.draw(g);
 			if (urgcols[urgency] != null) {
 				g.chcolor(urgcols[urgency]);
@@ -265,6 +270,10 @@ public class SlenHud extends ConsoleHost implements DTarget, DropTarget,
 		return (c.add(bgc.inv()));
 	}
 
+	public double getDisplayScale() {
+		return fitDisplayScale(Config.elementScale(Config.hudScale), sz);
+	}
+
 	public void error(String err) {
 		lasterr = errfoundry.render(err);
 		errtime = System.currentTimeMillis();
@@ -272,8 +281,9 @@ public class SlenHud extends ConsoleHost implements DTarget, DropTarget,
 
 	public void draw(GOut g) {
 		vc.tick();
-		c.x = (MainFrame.innerSize.width - sz.x) / 2;
-		c.y = MainFrame.innerSize.height + dy;
+		double scale = getDisplayScale();
+		c.x = (MainFrame.innerSize.width - getDisplaySize().x) / 2;
+		c.y = MainFrame.innerSize.height + (int) Math.round(dy * scale);
 		Coord bgc = sz.add(bg.sz().inv());
 		g.image(bg, bgc);
 		super.draw(g);

@@ -79,7 +79,7 @@ public class OptWnd extends Window {
 	Widget tab;
 
 	{ /* GENERAL TAB */
-	    tab = body.new Tab(new Coord(0, 0), 60, "General");
+	    tab = body.new Tab(new Coord(0, 0), 55, "General");
 
 	    new Button(new Coord(250, 505), 125, tab, "Quit") {
 		public void click() {
@@ -241,25 +241,54 @@ public class OptWnd extends Window {
 			}
 		}).a = Config.drawIcons;
 
-	    new Label(new Coord(10, 375), tab, "Display scale (restart required):");
-	    final boolean[] scaleReady = { false };
-	    final RadioGroup displayScale = new RadioGroup(tab) {
-		public void changed(int btn, String lbl) {
-		    if (scaleReady[0])
-			Config.setUIScale(btn + 1);
-		}
-	    };
-	    displayScale.add("1×", new Coord(20, 400));
-	    displayScale.add("2×", new Coord(105, 400));
-	    displayScale.add("3×", new Coord(190, 400));
-	    displayScale.check(Config.uiScale - 1);
-	    scaleReady[0] = true;
+	}
 
+	{ /* SCALING TAB */
+	    tab = body.new Tab(new Coord(58, 0), 55, "Scaling");
+	    new Label(new Coord(10, 28), tab,
+		    "Choose each element's size. Changes apply immediately.");
+
+	    addElementScale(tab, "Windows, action menu and toolbars", 55,
+		    new ScaleSetting() {
+			public int get() { return Config.windowScale; }
+			public void set(int value) { Config.windowScale = value; }
+		    });
+	    addElementScale(tab, "Status, bottom HUD and Messages bar", 115,
+		    new ScaleSetting() {
+			public int get() { return Config.hudScale; }
+			public void set(int value) { Config.hudScale = value; }
+		    });
+	    addElementScale(tab, "Chat panel", 175, new ScaleSetting() {
+		public int get() { return Config.chatScale; }
+		public void set(int value) { Config.chatScale = value; }
+	    });
+	    addElementScale(tab, "Clock", 235, new ScaleSetting() {
+		public int get() { return Config.clockScale; }
+		public void set(int value) { Config.clockScale = value; }
+	    });
+	    addElementScale(tab, "Minimap", 295, new ScaleSetting() {
+		public int get() { return Config.minimapScale; }
+		public void set(int value) { Config.minimapScale = value; }
+	    });
+	    addElementScale(tab, "Context menus, tooltips and item information", 355,
+		    new ScaleSetting() {
+			public int get() { return Config.contextScale; }
+			public void set(int value) { Config.contextScale = value; }
+		    });
+	    addElementScale(tab, "Hotkey and specialization guidance overlays", 415,
+		    new ScaleSetting() {
+			public int get() { return Config.helperScale; }
+			public void set(int value) { Config.helperScale = value; }
+		    });
+	    new Label(new Coord(10, 490), tab,
+		    "150% and 175% provide larger UI without changing the terrain scale.");
+	    new Label(new Coord(10, 512), tab,
+		    "Oversized elements are reduced automatically so their full contents remain visible.");
 	}
 
 	{ /* CAMERA TAB */
 	    curcam = Utils.getpref("defcam", "border");
-	    tab = body.new Tab(new Coord(70, 0), 60, "Camera");
+	    tab = body.new Tab(new Coord(116, 0), 55, "Camera");
 
 	    final RichTextBox caminfo = new RichTextBox(new Coord(180, 70), new Coord(210, 180), tab, "", foundry);
 	    caminfo.bg = new java.awt.Color(0, 0, 0, 64);
@@ -364,7 +393,7 @@ public class OptWnd extends Window {
 	}
 
 		{ /* AUDIO TAB */
-			tab = body.new Tab(new Coord(140, 0), 60, "Audio");
+			tab = body.new Tab(new Coord(174, 0), 50, "Audio");
 
 			new Label(new Coord(10, 40), tab, "Sound");
 			new Frame(new Coord(10, 65), new Coord(20, 206), tab);
@@ -412,7 +441,7 @@ public class OptWnd extends Window {
 		}
 
 	{ /* HIDE OBJECTS TAB */
-	    tab = body.new Tab(new Coord(210, 0), 80, "Hide Objects");
+	    tab = body.new Tab(new Coord(227, 0), 70, "Hide");
 
 	    String[][] checkboxesList = { { "Walls", "gfx/arch/walls" },
 		    { "Gates", "gfx/arch/gates" },
@@ -477,7 +506,7 @@ public class OptWnd extends Window {
 	}
 
 	{ /* CUSTOM TAB */
-			tab = body.new Tab(new Coord(300, 0), 60, "Custom");
+			tab = body.new Tab(new Coord(300, 0), 55, "Custom");
 
 		new Label(new Coord(15, 40), tab, "R");
 		new Label(new Coord(40, 40), tab, "G");
@@ -620,7 +649,7 @@ public class OptWnd extends Window {
 	}
 
 		{ /* INFO TAB */
-			tab = body.new Tab(new Coord(370, 0), 60, "Client Info");
+			tab = body.new Tab(new Coord(358, 0), 70, "Client Info");
 
 			final RichTextBox helpinfo = new RichTextBox(new Coord(5, 30), new Coord(400, 160), tab, "To report an issue with the client (or provide suggestions) please contact the developer, @trevorhnh, on discord.", foundry14);
 			helpinfo.bg = new java.awt.Color(0, 0, 0, 0);
@@ -632,7 +661,7 @@ public class OptWnd extends Window {
 		}
 
 		{ /* HELP AND ONBOARDING TAB */
-			tab = body.new Tab(new Coord(440, 0), 65, "Help");
+			tab = body.new Tab(new Coord(431, 0), 50, "Help");
 			new Label(new Coord(10, 30), tab, "Explanation detail:");
 			final boolean[] explanationReady = { false };
 			final RadioGroup explanation = new RadioGroup(tab) {
@@ -751,6 +780,11 @@ public class OptWnd extends Window {
 	}
     }
 
+	private interface ScaleSetting {
+		int get();
+		void set(int value);
+	}
+
 	public void update(long dt) {
 		String primary = "Primary: " + Specialization
 				.pathName(Config.specializationPrimary);
@@ -763,6 +797,37 @@ public class OptWnd extends Window {
 				&& !secondary.equals(specializationSecondaryLabel.texts))
 			specializationSecondaryLabel.settext(secondary);
 		super.update(dt);
+	}
+
+	private void addElementScale(Widget tab, String label, int y,
+			final ScaleSetting setting) {
+		new Label(new Coord(10, y), tab, label + ":");
+		final boolean[] ready = { false };
+		final int[] values = { 50, 75, 100, 125, 150, 175 };
+		RadioGroup group = new RadioGroup(tab) {
+			public void changed(int button, String text) {
+				if (ready[0]) {
+					setting.set(values[button]);
+					Config.saveOptions();
+				}
+			}
+		};
+		group.add("50%", new Coord(20, y + 13));
+		group.add("75%", new Coord(100, y + 13));
+		group.add("100%", new Coord(180, y + 13));
+		group.add("125%", new Coord(265, y + 13));
+		group.add("150%", new Coord(350, y + 13));
+		group.add("175%", new Coord(435, y + 13));
+		int current = Config.validateElementScale(setting.get());
+		int selected = 0;
+		for (int i = 0; i < values.length; i++) {
+			if (current == values[i]) {
+				selected = i;
+				break;
+			}
+		}
+		group.check(selected);
+		ready[0] = true;
 	}
 
 

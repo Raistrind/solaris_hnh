@@ -63,7 +63,29 @@ public class ChatHWPanel extends Widget implements IHWindowParent {
 	sub.visible = sdb.visible = false;
 	fbtn = new IButton(Coord.z, this, fbtni[0], fbtni[1], fbtni[2]);
 	loadOpts();
+	if (!Config.window_props.containsKey("chat_pos"))
+	    c.y = parent.sz.y - getDisplaySize().y;
+	keepOnScreen();
     }
+
+	public double getDisplayScale() {
+	    return fitDisplayScale(Config.elementScale(Config.chatScale), sz);
+	}
+
+	private void keepOnScreen() {
+	    if (!needsScaledBoundsCheck())
+		return;
+	    Coord displaySize = getDisplaySize();
+	    int maximumX = parent.sz.x - displaySize.x;
+	    int maximumY = parent.sz.y - displaySize.y;
+	    c.x = (maximumX < 0) ? 0 : Utils.clip(c.x, 0, maximumX);
+	    c.y = (maximumY < 0) ? 0 : Utils.clip(c.y, 0, maximumY);
+	}
+
+	public void update(long dt) {
+	    keepOnScreen();
+	    super.update(dt);
+	}
     
     private void loadOpts() {
 	synchronized (Config.window_props) {
@@ -310,7 +332,7 @@ public class ChatHWPanel extends Widget implements IHWindowParent {
     
     public void mousemove(Coord c) {
 	if (dm) {
-	    this.c = this.c.add(c.add(doff.inv()));
+	    this.c = this.c.add(localToParent(c.add(doff.inv())));
 	} else if (rsm){
 	    Coord d = c.sub(doff);
 	    deltasz(d);
@@ -328,7 +350,7 @@ public class ChatHWPanel extends Widget implements IHWindowParent {
 	if(sz.y < minsz.y)
 	    sz.y = minsz.y;
 	else
-	    this.c.y -= d.y;
+	    this.c.y -= localToParent(new Coord(0, d.y)).y;
 	btnc = sz.sub(sz.x, btnh);
 	Coord s = sz.sub(0, btnh + gzsz.y);
 	for (int i = 0; i < wnds.size(); i++) {

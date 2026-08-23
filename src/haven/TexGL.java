@@ -88,6 +88,8 @@ public abstract class TexGL extends Tex {
 		}
 		Color amb = blend(g, setenv(gl));
 		if (!disableall) {
+			Coord dc = g.drawCoord(c);
+			Coord dbr = g.drawCoord(c.add(sz));
 			gl.glBegin(GL.GL_QUADS);
 			float l = ((float) ul.x) / ((float) tdim.x);
 			float t = ((float) ul.y) / ((float) tdim.y);
@@ -98,13 +100,13 @@ public abstract class TexGL extends Tex {
 					(float) amb.getBlue() / 255.0f,
 					(float) amb.getAlpha() / 255.0f);
 			gl.glTexCoord2f(l, t);
-			gl.glVertex3i(c.x, c.y, 0);
+			gl.glVertex3i(dc.x, dc.y, 0);
 			gl.glTexCoord2f(r, t);
-			gl.glVertex3i(c.x + sz.x, c.y, 0);
+			gl.glVertex3i(dbr.x, dc.y, 0);
 			gl.glTexCoord2f(r, b);
-			gl.glVertex3i(c.x + sz.x, c.y + sz.y, 0);
+			gl.glVertex3i(dbr.x, dbr.y, 0);
 			gl.glTexCoord2f(l, b);
-			gl.glVertex3i(c.x, c.y + sz.y, 0);
+			gl.glVertex3i(dc.x, dbr.y, 0);
 			gl.glEnd();
 			checkerr(gl);
 		}

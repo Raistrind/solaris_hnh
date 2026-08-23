@@ -123,6 +123,7 @@ public class Window extends Widget implements DTarget {
 		setfocustab(true);
 		parent.setfocus(this);
 		loadpos();
+		keepOnScreen();
 	}
 
 	public Window(Coord c, Coord sz, Widget parent, String cap) {
@@ -130,6 +131,38 @@ public class Window extends Widget implements DTarget {
 	}
 
 	public void cdraw(GOut g) {
+	}
+
+	public double getDisplayScale() {
+		double desired = Config.elementScale(Config.windowScale);
+		Coord bounds = (cap == null) ? sz : sz.add(0, 7);
+		return fitDisplayScale(desired, bounds);
+	}
+
+	/** Fixed HUD windows override this so their intentional edge offsets remain intact. */
+	protected boolean shouldKeepOnScreen() {
+		return true;
+	}
+
+	protected void keepOnScreen() {
+		if ((parent == null) || !shouldKeepOnScreen()
+				|| !needsScaledBoundsCheck())
+			return;
+		Coord displaySize = getDisplaySize();
+		int maximumX = parent.sz.x - displaySize.x;
+		int maximumY = parent.sz.y - displaySize.y;
+		c.x = (maximumX < 0) ? 0 : Utils.clip(c.x, 0, maximumX);
+		int captionMargin = (cap == null) ? 0 : (int) Math.ceil(7 *
+				getDisplayScale());
+		if (maximumY < captionMargin)
+			c.y = Math.max(0, maximumY);
+		else
+			c.y = Utils.clip(c.y, captionMargin, maximumY);
+	}
+
+	public void update(long dt) {
+		keepOnScreen();
+		super.update(dt);
 	}
 
 	public void draw(GOut og) {
@@ -267,6 +300,7 @@ public class Window extends Widget implements DTarget {
 		if (dm) {
 			ui.grabmouse(null);
 			dm = false;
+			keepOnScreen();
 			storepos();
 		} else {
 			super.mouseup(c, button);
@@ -276,7 +310,7 @@ public class Window extends Widget implements DTarget {
 
 	public void mousemove(Coord c) {
 		if (dm) {
-			this.c = this.c.add(c.add(doff.inv()));
+			this.c = this.c.add(localToParent(c.add(doff.inv())));
 		} else {
 			super.mousemove(c);
 		}

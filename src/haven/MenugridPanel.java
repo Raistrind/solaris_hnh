@@ -9,6 +9,10 @@ public class MenugridPanel extends Window{
     static final Coord minsz = new Coord(154, 152);
 	static final Coord fixsz = new Coord(300, 200);
     public MenuGrid menugrid;
+
+	protected boolean shouldKeepOnScreen() {
+		return false;
+	}
     
 	public MenugridPanel(Coord c, Coord sz, Widget parent) {
 		super(new Coord(50, 50), sz, parent, "Menu");

@@ -36,6 +36,14 @@ public class GOut {
 	private Color color = Color.WHITE;
 	final GLContext ctx;
 	private Shared sh;
+	/*
+	 * Drawing coordinates are kept in the widgets' logical coordinate space
+	 * and converted only when vertices are submitted.  This avoids mixing
+	 * OpenGL matrix scaling with Tex.crender's CPU-side clipping.
+	 */
+	private double drawScale = 1.0;
+	private double drawOffsetX = 0.0;
+	private double drawOffsetY = 0.0;
 
 	private static class Shared {
 		int curtex = -1;
@@ -49,6 +57,9 @@ public class GOut {
 		this.color = o.color;
 		this.ctx = o.ctx;
 		this.sh = o.sh;
+		this.drawScale = o.drawScale;
+		this.drawOffsetX = o.drawOffsetX;
+		this.drawOffsetY = o.drawOffsetY;
 	}
 
 	public GOut(GL gl, GLContext ctx, Coord sz) {
@@ -137,8 +148,14 @@ public class GOut {
 		checkerr();
 	}
 
+	Coord drawCoord(Coord c) {
+		return new Coord((int) Math.round((c.x * drawScale) + drawOffsetX),
+				(int) Math.round((c.y * drawScale) + drawOffsetY));
+	}
+
 	private void vertex(Coord c) {
-		gl.glVertex2i(c.x + ul.x, c.y + ul.y);
+		Coord dc = drawCoord(c.add(ul));
+		gl.glVertex2i(dc.x, dc.y);
 	}
 
 	void texsel(int id) {
@@ -276,6 +293,18 @@ public class GOut {
 		g.ul = this.ul.add(ul);
 		g.sz = sz;
 		return (g);
+	}
+
+	/**
+	 * Returns a drawing context scaled around an absolute logical-coordinate
+	 * origin.  Clipping remains logical; only submitted vertices are scaled.
+	 */
+	public GOut scaled(double scale, Coord origin) {
+		GOut g = new GOut(this);
+		g.drawOffsetX = drawOffsetX + (drawScale * origin.x * (1.0 - scale));
+		g.drawOffsetY = drawOffsetY + (drawScale * origin.y * (1.0 - scale));
+		g.drawScale = drawScale * scale;
+		return g;
 	}
 
 	public void scale(double d) {

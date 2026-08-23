@@ -66,6 +66,10 @@ public class MenuGrid extends Window {
 	boolean rsm = false;
 	static final Coord minsz = new Coord(bgsz.x * 4 + 30, bgsz.y * 4 + 28);
 
+	protected boolean shouldKeepOnScreen() {
+		return false;
+	}
+
 	static {
 		Widget.addtype("scm", new WidgetFactory() {
 			public Widget create(Coord c, Widget parent, Object[] args) {

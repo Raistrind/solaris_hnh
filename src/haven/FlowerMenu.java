@@ -218,10 +218,46 @@ public class FlowerMenu extends Widget {
 			menuOptions[i].num = i;
 		}
 		organize(menuOptions);
+		keepOnScreen();
 		ui.grabmouse(this);
 		ui.grabkeys(this);
 		anim = new Opening();
 		ui.popupMenu = this; //Kerri: sets after it ready
+	}
+
+	public double getDisplayScale() {
+		return Config.elementScale(Config.contextScale);
+	}
+
+	private void keepOnScreen() {
+		if ((parent == null) || (menuOptions.length == 0)
+				|| !needsScaledBoundsCheck())
+			return;
+		int minimumX = 0;
+		int minimumY = 0;
+		int maximumX = 0;
+		int maximumY = 0;
+		for (Petal petal : menuOptions) {
+			Coord center = Coord.sc(petal.ta, petal.tr);
+			Coord upperLeft = center.sub(petal.sz.div(2));
+			minimumX = Math.min(minimumX, upperLeft.x);
+			minimumY = Math.min(minimumY, upperLeft.y);
+			maximumX = Math.max(maximumX, upperLeft.x + petal.sz.x);
+			maximumY = Math.max(maximumY, upperLeft.y + petal.sz.y);
+		}
+		double scale = getDisplayScale();
+		int displayLeft = (int) Math.floor(minimumX * scale);
+		int displayTop = (int) Math.floor(minimumY * scale);
+		int displayRight = (int) Math.ceil(maximumX * scale);
+		int displayBottom = (int) Math.ceil(maximumY * scale);
+		if ((c.x + displayLeft) < 0)
+			c.x = -displayLeft;
+		else if ((c.x + displayRight) > parent.sz.x)
+			c.x = parent.sz.x - displayRight;
+		if ((c.y + displayTop) < 0)
+			c.y = -displayTop;
+		else if ((c.y + displayBottom) > parent.sz.y)
+			c.y = parent.sz.y - displayBottom;
 	}
 
 	public boolean mousedown(Coord c, int button) {

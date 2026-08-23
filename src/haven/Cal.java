@@ -78,11 +78,16 @@ public class Cal extends SSWidget {
 	super(c, Utils.imgsz(bg), parent);
 	render();
     }
+
+    public double getDisplayScale() {
+	return fitDisplayScale(Config.elementScale(Config.clockScale), sz);
+    }
 	
     public void draw(GOut g) {
     	if(!Config.showDayTime)
     		return;
-        c.x = MainFrame.centerPoint.x - dx;
+		double scale = getDisplayScale();
+        c.x = MainFrame.centerPoint.x - (int)Math.round(dx * scale);
         if(!current.equals(ui.sess.glob.ast))
         	render();
 	super.draw(g);
