@@ -758,14 +758,7 @@ public class Item extends Widget implements DTarget {
 	public boolean mousedown(Coord c, int button) {
 		if (!isDragging) {
 			if ((button == 2) && Config.showItemContext) {
-				Resource resource = res.get();
-				String resourceName = (resource == null) ? GetResName()
-						: resource.name;
-				String displayName = (resource == null) ? name()
-						: KnowledgeBase.displayName(resource);
-				if ((displayName == null) || (displayName.trim().length() == 0))
-					displayName = KnowledgeBase.humanize(resourceName);
-				KnowledgeWindow.openForItem(ui, displayName, resourceName);
+				openRecipeBrowser();
 				return true;
 			} else if (button == 1) {
 				if (ui.modshift)
@@ -784,8 +777,14 @@ public class Item extends Widget implements DTarget {
 					wdgmsg("drop_such_all", GetResName());
 				} else if (ui.modshift) {
 					wdgmsg("transfer_such_all", GetResName());
-				} else
+				} else {
+					if (Config.showItemRecipeMenu) {
+						String[] identity = contextIdentity();
+						FlowerMenu.expectItemRecipeOption(ui, identity[0],
+								identity[1], new Coord(ui.mc));
+					}
 					wdgmsg("iact", c);
+				}
 				return (true);
 			}
 		} else {
@@ -797,6 +796,21 @@ public class Item extends Widget implements DTarget {
 			return (true);
 		}
 		return (false);
+	}
+
+	private String[] contextIdentity() {
+		Resource resource = res.get();
+		String resourceName = (resource == null) ? GetResName() : resource.name;
+		String displayName = (resource == null) ? name()
+				: KnowledgeBase.displayName(resource);
+		if ((displayName == null) || (displayName.trim().length() == 0))
+			displayName = KnowledgeBase.humanize(resourceName);
+		return new String[] { displayName, resourceName };
+	}
+
+	private void openRecipeBrowser() {
+		String[] identity = contextIdentity();
+		KnowledgeWindow.openForItem(ui, identity[0], identity[1]);
 	}
 
 	public void mousemove(Coord c) {

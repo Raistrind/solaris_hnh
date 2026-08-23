@@ -39,6 +39,91 @@ public class FlowerMenu extends Widget {
 	static int ph = 30, ppl = 8;
 	Petal[] menuOptions;
 	Anim anim;
+	private static final long ITEM_RECIPE_TIMEOUT = 3000;
+	private static final long ITEM_RECIPE_BUTTON_TIMEOUT = 8000;
+	private static final int ITEM_RECIPE_BUTTON_WIDTH = 180;
+	private static ItemRecipeRequest pendingItemRecipe;
+	private ItemRecipeRequest itemRecipeRequest;
+
+	private static class ItemRecipeRequest {
+		final UI ui;
+		final String name;
+		final String resource;
+		final long created;
+		ItemRecipeButton button;
+		FlowerMenu menu;
+
+		ItemRecipeRequest(UI ui, String name, String resource) {
+			this.ui = ui;
+			this.name = name;
+			this.resource = resource;
+			created = System.currentTimeMillis();
+		}
+	}
+
+	private static class ItemRecipeButton extends Button {
+		private final ItemRecipeRequest request;
+
+		ItemRecipeButton(Coord c, UI ui, ItemRecipeRequest request) {
+			super(c, ITEM_RECIPE_BUTTON_WIDTH, ui.root,
+					"Recipes using this item");
+			this.request = request;
+		}
+
+		public void click() {
+			FlowerMenu menu = request.menu;
+			request.menu = null;
+			if ((menu != null) && (menu.parent != null))
+				menu.cancelForLocalRecipe();
+			clearPendingItemRecipe(request);
+			if (parent != null)
+				ui.destroy(this);
+			KnowledgeWindow.openForItem(ui, request.name, request.resource);
+		}
+
+		public void update(long dt) {
+			super.update(dt);
+			if ((System.currentTimeMillis() - request.created)
+					> ITEM_RECIPE_BUTTON_TIMEOUT) {
+				clearPendingItemRecipe(request);
+				if (parent != null)
+					ui.destroy(this);
+			}
+		}
+	}
+
+	/** Adds a local reverse-recipe choice to the next server item menu. */
+	public static synchronized void expectItemRecipeOption(UI ui, String name,
+			String resource, Coord clickPosition) {
+		if ((pendingItemRecipe != null) &&
+				(pendingItemRecipe.button != null) &&
+				(pendingItemRecipe.button.parent != null))
+			pendingItemRecipe.button.ui.destroy(pendingItemRecipe.button);
+		ItemRecipeRequest request = new ItemRecipeRequest(ui, name, resource);
+		Coord position = clickPosition.add(-(ITEM_RECIPE_BUTTON_WIDTH / 2), 24);
+		position.x = Math.max(0, Math.min(position.x,
+				ui.root.sz.x - ITEM_RECIPE_BUTTON_WIDTH));
+		if ((position.y + 19) > ui.root.sz.y)
+			position.y = Math.max(0, clickPosition.y - 43);
+		request.button = new ItemRecipeButton(position, ui, request);
+		pendingItemRecipe = request;
+	}
+
+	private static synchronized void clearPendingItemRecipe(
+			ItemRecipeRequest request) {
+		if (pendingItemRecipe == request)
+			pendingItemRecipe = null;
+	}
+
+	private static synchronized ItemRecipeRequest consumeItemRecipeOption(UI ui) {
+		ItemRecipeRequest request = pendingItemRecipe;
+		pendingItemRecipe = null;
+		if ((request == null) || (request.ui != ui)
+				|| ((System.currentTimeMillis() - request.created)
+						> ITEM_RECIPE_TIMEOUT))
+			return null;
+		return request;
+	}
 
 	static {
 		Widget.addtype("sm", new WidgetFactory() {
@@ -211,6 +296,7 @@ public class FlowerMenu extends Widget {
 		super(c, Coord.z, parent);
 		MapView.FlowerMenuTargetInfo target = (ui.mapview == null) ? null
 				: ui.mapview.consumeFlowerMenuTargetInfo();
+		itemRecipeRequest = consumeItemRecipeOption(ui);
 		menuOptions = new Petal[options.length];
 		for (int i = 0; i < options.length; i++) {
 			menuOptions[i] = new Petal(options[i], targetOptionLabel(options[i],
@@ -219,10 +305,32 @@ public class FlowerMenu extends Widget {
 		}
 		organize(menuOptions);
 		keepOnScreen();
+		if (itemRecipeRequest != null) {
+			itemRecipeRequest.menu = this;
+			positionItemRecipeButton(itemRecipeRequest.button);
+		}
 		ui.grabmouse(this);
 		ui.grabkeys(this);
 		anim = new Opening();
 		ui.popupMenu = this; //Kerri: sets after it ready
+	}
+
+	/** Places the local recipe button below and outside the server-owned petals. */
+	private void positionItemRecipeButton(ItemRecipeButton button) {
+		if ((button == null) || (button.parent == null))
+			return;
+		int bottom = 0;
+		for (Petal petal : menuOptions) {
+			Coord center = Coord.sc(petal.ta, petal.tr);
+			bottom = Math.max(bottom, center.y + (petal.sz.y / 2));
+		}
+		Coord position = new Coord(c.x - (ITEM_RECIPE_BUTTON_WIDTH / 2),
+				c.y + Math.max(24, bottom + 5));
+		position.x = Math.max(0, Math.min(position.x,
+				ui.root.sz.x - button.sz.x));
+		position.y = Math.max(0, Math.min(position.y,
+				ui.root.sz.y - button.sz.y));
+		button.c = position;
 	}
 
 	public double getDisplayScale() {
@@ -292,13 +400,27 @@ public class FlowerMenu extends Widget {
 		wdgmsg("cl", -1);
 	}
 
+	private void cancelForLocalRecipe() {
+		wdgmsg("cl", -1);
+		anim = new Cancel();
+		ui.grabmouse(null);
+		ui.grabkeys(null);
+	}
+
 	public void uimsg(String msg, Object... args) {
 		if (msg == "cancel") {
 			anim = new Cancel();
 			ui.grabmouse(null);
 			ui.grabkeys(null);
 		} else if (msg == "act") {
-			anim = new Chosen(menuOptions[(Integer) args[0]]);
+			int option = (Integer) args[0];
+			if ((option < 0) || (option >= menuOptions.length)) {
+				anim = new Cancel();
+				ui.grabmouse(null);
+				ui.grabkeys(null);
+				return;
+			}
+			anim = new Chosen(menuOptions[option]);
 			ui.grabmouse(null);
 			ui.grabkeys(null);
 		}
@@ -314,9 +436,16 @@ public class FlowerMenu extends Widget {
 
 	@Override
 	public void unlink() {
-		// TODO Auto-generated method stub
+		if (itemRecipeRequest != null) {
+			itemRecipeRequest.menu = null;
+			if ((itemRecipeRequest.button != null)
+					&& (itemRecipeRequest.button.parent != null))
+				itemRecipeRequest.button.ui.destroy(itemRecipeRequest.button);
+			itemRecipeRequest = null;
+		}
 		super.unlink();
-		UI.instance.popupMenu = null;
+		if (ui.popupMenu == this)
+			ui.popupMenu = null;
 	}
 
 	public boolean type(char key, java.awt.event.KeyEvent ev) {

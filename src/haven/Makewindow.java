@@ -37,6 +37,7 @@ public class Makewindow extends HWindow {
 	List<Widget> inputs;
 	List<Widget> outputs;
 	private boolean recipeCaptured = false;
+	private int recipeRevision = 0;
 	static Coord boff = new Coord(7, 9);
 	public static final Text.Foundry nmf = new Text.Foundry(new Font("Serif",
 			Font.PLAIN, 20));
@@ -95,6 +96,7 @@ public class Makewindow extends HWindow {
 
 	public void uimsg(String msg, Object... args) {
 		if (msg == "pop") {
+			recipeRevision++;
 			is_ready = true;
 			recipeCaptured = false;
 			final int xoff = 50;
@@ -142,6 +144,14 @@ public class Makewindow extends HWindow {
 			}
 		}
 		return ingredients;
+	}
+
+	public boolean isRecipeCaptured() {
+		return recipeCaptured;
+	}
+
+	public int recipeRevision() {
+		return recipeRevision;
 	}
 
 	public void update(long dt) {

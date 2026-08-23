@@ -24,6 +24,8 @@ public class KnowledgeWindow extends Window {
 	private final RichTextBox content;
 	private final Label title;
 	private final Label status;
+	private final Button indexButton;
+	private final RecipeIndexer recipeIndexer;
 	private String category = KnowledgeBase.ALL;
 	private String lastSearch = null;
 	private int lastGeneration = -1;
@@ -59,6 +61,7 @@ public class KnowledgeWindow extends Window {
 	}
 
 	public static void openForItem(UI ui, String name, String resource) {
+		KnowledgeBase.syncAvailableRecipes(ui);
 		open(ui, "inventory-crafting");
 		if (instance != null)
 			instance.showDocument(KnowledgeBase.reverseDocument(name, resource));
@@ -95,6 +98,13 @@ public class KnowledgeWindow extends Window {
 		addFilterButton(102, 50, 48, KnowledgeBase.PATHS);
 
 		list = new DocumentList(new Coord(0, 77), new Coord(210, 308), this);
+		recipeIndexer = new RecipeIndexer();
+		indexButton = new Button(new Coord(0, 389), 205, this,
+				"Index available recipes") {
+			public void click() {
+				recipeIndexer.toggle();
+			}
+		};
 		title = new Label(new Coord(220, 3), this, "Offline Handbook",
 				new Text.Foundry(new Font("SansSerif", Font.BOLD, 14), Color.WHITE));
 		content = new RichTextBox(new Coord(220, 25), new Coord(470, 355), this,
@@ -102,7 +112,7 @@ public class KnowledgeWindow extends Window {
 		content.bg = new Color(10, 10, 10, 210);
 		content.registerclicks = true;
 		status = new Label(new Coord(220, 387), this,
-				"Shift-hover: details | Middle-click item: reverse recipes");
+				"Right-click item: actions | Middle-click: reverse recipes");
 		refreshList();
 		showDocument(KnowledgeBase.document("home"));
 	}
@@ -125,7 +135,10 @@ public class KnowledgeWindow extends Window {
 				lastSearch);
 		list.setDocuments(found);
 		list.selected = selected;
-		status.settext(found.size() + " entries | Shift-hover: details | Middle-click item: reverse recipes");
+		status.settext(found.size()
+				+ " entries | Right-click item: actions | Middle-click: reverse recipes");
+		if (recipeIndexer.isRunning())
+			recipeIndexer.updateStatus();
 	}
 
 	private void showDocument(KnowledgeBase.Document document) {
@@ -140,8 +153,15 @@ public class KnowledgeWindow extends Window {
 	}
 
 	private void handleAction(String action) {
-		if ((action != null) && action.startsWith("doc:"))
+		if ((action != null) && action.startsWith("doc:")) {
 			showDocument(KnowledgeBase.document(action.substring(4)));
+		} else if ((action != null) && action.startsWith("craft:")) {
+			if (KnowledgeBase.openRecipe(ui, action.substring(6))) {
+				hide();
+			} else {
+				status.settext("Recipe is not currently unlocked or available in the crafting menu.");
+			}
+		}
 	}
 
 	public void update(long dt) {
@@ -149,6 +169,7 @@ public class KnowledgeWindow extends Window {
 				|| (lastGeneration != KnowledgeBase.generation())
 				|| (lastSpecializationGeneration != Specialization.generation()))
 			refreshList();
+		recipeIndexer.update();
 		super.update(dt);
 	}
 
@@ -161,9 +182,176 @@ public class KnowledgeWindow extends Window {
 	}
 
 	public void destroy() {
+		recipeIndexer.stop();
 		if (instance == this)
 			instance = null;
 		super.destroy();
+	}
+
+	private class RecipeIndexer {
+		private static final long RECIPE_TIMEOUT = 15000;
+		private static final long BETWEEN_RECIPES = 250;
+		private List<Resource> resources = new ArrayList<Resource>();
+		private boolean running = false;
+		private int next = 0;
+		private int completed = 0;
+		private int skipped = 0;
+		private int alreadyIndexed = 0;
+		private Resource current = null;
+		private String currentName = "";
+		private Makewindow windowBeforeRequest = null;
+		private int revisionBeforeRequest = -1;
+		private long requestedAt = 0;
+		private long nextRequestAt = 0;
+
+		boolean isRunning() {
+			return running;
+		}
+
+		void toggle() {
+			if (running)
+				cancel();
+			else
+				start();
+		}
+
+		private void start() {
+			if ((ui.sess == null) || (ui.menugrid == null)) {
+				status.settext("Recipe indexing requires an active game session.");
+				return;
+			}
+			List<Resource> available = KnowledgeBase.availableRecipeResources(ui);
+			resources = new ArrayList<Resource>();
+			alreadyIndexed = 0;
+			for (Resource resource : available) {
+				Resource.AButton action = action(resource);
+				if ((action != null) && KnowledgeBase.isRecipeActionIndexed(resource,
+						action.name))
+					alreadyIndexed++;
+				else if (action != null)
+					resources.add(resource);
+			}
+			if (available.isEmpty()) {
+				status.settext("No unlocked crafting recipes are currently available.");
+				return;
+			}
+			if (resources.isEmpty()) {
+				status.settext("All " + alreadyIndexed
+						+ " available recipes are already indexed.");
+				return;
+			}
+			running = true;
+			next = 0;
+			completed = 0;
+			skipped = 0;
+			current = null;
+			currentName = "";
+			windowBeforeRequest = null;
+			revisionBeforeRequest = -1;
+			nextRequestAt = System.currentTimeMillis();
+			indexButton.change("Cancel recipe indexing", Color.WHITE);
+			updateStatus();
+		}
+
+		private void cancel() {
+			running = false;
+			current = null;
+			indexButton.change("Index available recipes", Color.WHITE);
+			status.settext("Recipe indexing cancelled after " + completed
+					+ " of " + resources.size() + " recipes.");
+		}
+
+		void stop() {
+			running = false;
+			current = null;
+		}
+
+		private Resource.AButton action(Resource resource) {
+			if ((resource == null) || resource.loading)
+				return null;
+			Resource.AButton action = resource.layer(Resource.action);
+			if ((action == null) || (action.ad == null) || (action.ad.length < 2)
+					|| !action.ad[0].equals("craft"))
+				return null;
+			return action;
+		}
+
+		void update() {
+			if (!running)
+				return;
+			long now = System.currentTimeMillis();
+			if (current != null) {
+				Makewindow window = ui.make_window;
+				boolean receivedNewRecipe = (window != null)
+						&& ((window != windowBeforeRequest)
+								|| (window.recipeRevision() > revisionBeforeRequest));
+				if (receivedNewRecipe && window.is_ready
+						&& window.isRecipeCaptured()) {
+					KnowledgeBase.linkRecipeAction(current, currentName,
+							window.craft_name);
+					completed++;
+					current = null;
+					nextRequestAt = now + BETWEEN_RECIPES;
+					updateStatus();
+				} else if ((now - requestedAt) > RECIPE_TIMEOUT) {
+					skipped++;
+					current = null;
+					nextRequestAt = now + BETWEEN_RECIPES;
+					updateStatus();
+				}
+				return;
+			}
+			if (next >= resources.size()) {
+				finish();
+				return;
+			}
+			if (now < nextRequestAt)
+				return;
+			Resource resource = resources.get(next++);
+			Resource.AButton action = action(resource);
+			if (action == null) {
+				skipped++;
+				nextRequestAt = now + BETWEEN_RECIPES;
+				updateStatus();
+				return;
+			}
+			current = resource;
+			currentName = action.name;
+			windowBeforeRequest = ui.make_window;
+			revisionBeforeRequest = (windowBeforeRequest == null) ? -1
+					: windowBeforeRequest.recipeRevision();
+			requestedAt = now;
+			try {
+				ui.menugrid.use(resource);
+			} catch (RuntimeException exception) {
+				skipped++;
+				current = null;
+				nextRequestAt = now + BETWEEN_RECIPES;
+			}
+			updateStatus();
+		}
+
+		void updateStatus() {
+			int processed = completed + skipped;
+			if (current != null)
+				status.settext("Indexing " + (processed + 1) + "/"
+						+ resources.size() + ": " + currentName);
+			else
+				status.settext("Recipe indexing: " + processed + "/"
+						+ resources.size() + ((skipped > 0) ? " (" + skipped
+								+ " failed)" : "") + ((alreadyIndexed > 0)
+								? " | " + alreadyIndexed + " already indexed" : ""));
+		}
+
+		private void finish() {
+			running = false;
+			indexButton.change("Index available recipes", Color.WHITE);
+			KnowledgeBase.syncAvailableRecipes(ui);
+			refreshList();
+			status.settext("Recipe indexing complete: " + completed + " new, "
+					+ alreadyIndexed + " already indexed"
+					+ ((skipped > 0) ? ", " + skipped + " failed." : "."));
+		}
 	}
 
 	private class DocumentList extends Widget {

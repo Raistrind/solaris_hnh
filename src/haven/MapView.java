@@ -616,6 +616,7 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 		//terobjradiuses.put("");
 		radiuses.put("gfx/terobjs/mining/minesupport", 100);
 		radiuses.put("gfx/terobjs/bhive", 150);
+		radiuses.put("gfx/terobjs/bhived", 150);
 		BreadcrumbTrail.reset();
 
 	}

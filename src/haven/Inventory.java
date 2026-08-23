@@ -333,7 +333,8 @@ public class Inventory extends Widget implements DTarget {
 			return false;
 		String title = wnd.cap.text;
 		return title.equals("Inventory") || title.equals("Cupboard") ||
-				title.equals("Chest") || title.equals("Seedbag") ||
+				title.equals("Chest") || title.equals("Coffer") ||
+				title.equals("Seedbag") ||
 				title.equals("Barrel") || title.equals("Crate") ||
 				title.equals("Basket");
 	}

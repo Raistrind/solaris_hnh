@@ -76,6 +76,7 @@ public final class KnowledgeBase {
 		public String name;
 		public String description = "";
 		public String requirements = "";
+		public String actionResource = "";
 		public List<Ingredient> inputs = new ArrayList<Ingredient>();
 		public List<Ingredient> outputs = new ArrayList<Ingredient>();
 
@@ -148,6 +149,10 @@ public final class KnowledgeBase {
 		return "$a[doc:" + id + "]{$col[120,190,255]{$u{" + label + "}}}";
 	}
 
+	private static String actionLink(String action, String label) {
+		return "$a[" + action + "]{$col[255,205,90]{$u{" + q(label) + "}}}";
+	}
+
 	private static void addDoc(String id, String title, String category,
 			String body) {
 		documents.put(id, new Document(id, title, category, body));
@@ -164,7 +169,7 @@ public final class KnowledgeBase {
 				+ link("exploration-map", "Exploration and maps") + "\n"
 				+ link("specialization-current", "My specialization path") + "\n\n"
 				+ "$b{Context controls}\n"
-				+ "Hold Shift while hovering for detailed information. Middle-click an inventory item to find recipes that use it. Ctrl+F1 opens this handbook; Ctrl+Shift+F1 toggles the hotkey overlay; Ctrl+Shift+P opens the specialization planner.");
+				+ "Hold Shift while hovering for detailed information. Right-click an inventory item for its action and recipe menu; middle-click remains a direct reverse-recipe shortcut. Ctrl+F1 opens this handbook; Ctrl+Shift+F1 toggles the hotkey overlay; Ctrl+Shift+P opens the specialization planner.");
 		addDoc("getting-started", "Getting Started", GUIDES,
 				"$size[15]{$b{Getting Started}}\n\n"
 				+ "Begin with food, water, basic tools, storage and a recognizable route home. Avoid committing every material to one project until you understand how it is obtained.\n\n"
@@ -179,7 +184,7 @@ public final class KnowledgeBase {
 				+ link("term-quality", "Quality") + ".");
 		addDoc("controls", "Controls and Hotkeys", GUIDES,
 				"$size[15]{$b{Controls and Hotkeys}}\n\n"
-				+ "$b{Help}\nCtrl+F1: handbook or current context\nCtrl+Shift+F1: hotkey overlay\nCtrl+Shift+P: specialization planner\nShift-hover: advanced information\nMiddle-click item: recipes using it\n\n"
+				+ "$b{Help}\nCtrl+F1: handbook or current context\nCtrl+Shift+F1: hotkey overlay\nCtrl+Shift+P: specialization planner\nShift-hover: advanced information\nRight-click item: actions and recipes\nMiddle-click item: direct reverse-recipe shortcut\n\n"
 				+ "$b{Maps and view}\nCtrl+M: minimap\nCtrl+Shift+M: world map\nCtrl+G: grid\nHome: reset camera\nEnd: screenshot\n\n"
 				+ "$b{Movement}\nAlt+Q/W/E/R: crawl, walk, run, sprint\nCtrl+N: night vision\nCtrl+X: x-ray\nCtrl+H: hide configured objects\n\n"
 				+ "Toolbar assignments can override some function keys. The on-screen overlay lists the client-level bindings added by Solaris.");
@@ -189,7 +194,7 @@ public final class KnowledgeBase {
 				+ "$b{Category colors}\nGreen: food   Purple: curiosity   Blue: tool   Red: weapon   Gold: equipment\nBrown: material   Pink: forageable   Orange: crop   Cyan: liquid   Gray: other\n\n"
 				+ "$b{Specialization corners}\nA small gold corner marks an item relevant to the primary path; cyan marks one relevant only to the secondary path. These markers can be disabled in Options > Help.\n\n"
 				+ "$b{Recipe encyclopedia}\nUnlocked crafting pages are indexed automatically. When a recipe is opened, the server-supplied ingredient and result list is saved locally. This lets the handbook remember exact ingredients and perform reverse searches later.\n\n"
-				+ "Middle-click any inventory item to list recipes that use it. A recipe not yet opened can still appear by name, but exact ingredients become available only after the crafting window has supplied them.\n\n"
+				+ "Right-click any inventory item and choose Recipes using this item, or middle-click it as a shortcut. Use Open crafting beside a result to open the normal crafting window directly. The Index available recipes button opens currently unlocked recipes that are still missing exact details, records them without crafting, and can be cancelled at any time. Recipes already indexed are left untouched. A recipe not yet opened can still appear by name, but exact ingredients become available only after the crafting window has supplied them.\n\n"
 				+ "Related: " + link("term-quality", "Quality") + " and "
 				+ link("term-softcap", "Softcaps") + ".");
 		addDoc("food-fep", "Food, Hunger and FEP", GUIDES,
@@ -581,7 +586,7 @@ public final class KnowledgeBase {
 				text.append(equipmentComparison(item));
 			text.append(Specialization.itemAdvice(name, resourceName,
 					info.category, true));
-			text.append("\n$col[170,170,170]{Middle-click: recipes using this item.");
+			text.append("\n$col[170,170,170]{Right-click: item actions and recipes. Middle-click: recipe shortcut.");
 			if (Config.showTerminologyLinks)
 				text.append(" Ctrl+F1: handbook context.");
 			text.append("}");
@@ -731,6 +736,56 @@ public final class KnowledgeBase {
 		saveRecipes();
 	}
 
+	private static boolean complete(Recipe recipe) {
+		return (recipe != null) && !recipe.outputs.isEmpty();
+	}
+
+	/** True when this exact menu action already has captured recipe details. */
+	public static synchronized boolean isRecipeActionIndexed(Resource resource,
+			String actionName) {
+		String resourceName = (resource == null) ? "" : clean(resource.name);
+		String normalizedName = normalize(actionName);
+		for (Recipe recipe : recipes.values()) {
+			if (!complete(recipe))
+				continue;
+			if ((resourceName.length() > 0)
+					&& recipe.actionResource.equals(resourceName))
+				return true;
+			if ((normalizedName.length() > 0)
+					&& normalize(recipe.name).equals(normalizedName))
+				return true;
+		}
+		return false;
+	}
+
+	/** Remembers which menu action produced a possibly differently named recipe. */
+	public static synchronized void linkRecipeAction(Resource resource,
+			String actionName, String capturedName) {
+		if ((resource == null) || (clean(capturedName).length() == 0))
+			return;
+		Recipe captured = recipeFor(capturedName);
+		Recipe alias = recipes.get(normalize(actionName));
+		boolean changed = false;
+		if ((alias != null) && (alias != captured) && !complete(alias)) {
+			if ((captured.description.length() == 0)
+					&& (alias.description.length() > 0))
+				captured.description = alias.description;
+			if ((captured.requirements.length() == 0)
+					&& (alias.requirements.length() > 0))
+				captured.requirements = alias.requirements;
+			recipes.remove(normalize(actionName));
+			changed = true;
+		}
+		if (!captured.actionResource.equals(resource.name)) {
+			captured.actionResource = resource.name;
+			changed = true;
+		}
+		if (changed) {
+			generation++;
+			saveRecipes();
+		}
+	}
+
 	private static List<Ingredient> copyIngredients(List<Ingredient> values) {
 		List<Ingredient> copy = new ArrayList<Ingredient>();
 		if (values != null)
@@ -748,6 +803,16 @@ public final class KnowledgeBase {
 		return recipe;
 	}
 
+	private static Recipe recipeForAction(Resource resource, String actionName) {
+		if (resource != null) {
+			for (Recipe recipe : recipes.values()) {
+				if (recipe.actionResource.equals(resource.name))
+					return recipe;
+			}
+		}
+		return recipes.get(normalize(actionName));
+	}
+
 	public static synchronized void syncAvailableRecipes(UI ui) {
 		if ((ui == null) || (ui.sess == null) || (ui.sess.glob == null))
 			return;
@@ -760,11 +825,13 @@ public final class KnowledgeBase {
 			if ((resource == null) || resource.loading)
 				continue;
 			Resource.AButton action = resource.layer(Resource.action);
-			if ((action == null) || (action.ad == null) || (action.ad.length == 0)
+			if ((action == null) || (action.ad == null) || (action.ad.length < 2)
 					|| !action.ad[0].equals("craft"))
 				continue;
-			boolean newRecipe = !recipes.containsKey(normalize(action.name));
-			Recipe recipe = recipeFor(action.name);
+			Recipe recipe = recipeForAction(resource, action.name);
+			boolean newRecipe = (recipe == null);
+			if (newRecipe)
+				recipe = recipeFor(action.name);
 			if (newRecipe)
 				changed = true;
 			String description = "";
@@ -792,6 +859,32 @@ public final class KnowledgeBase {
 		}
 	}
 
+	/** Returns one loaded crafting action per unlocked recipe, sorted by name. */
+	public static synchronized List<Resource> availableRecipeResources(UI ui) {
+		List<Resource> found = new ArrayList<Resource>();
+		if ((ui == null) || (ui.sess == null) || (ui.sess.glob == null))
+			return found;
+		syncAvailableRecipes(ui);
+		Collection<Resource> available;
+		synchronized (ui.sess.glob.paginae) {
+			available = new ArrayList<Resource>(ui.sess.glob.paginae);
+		}
+		Map<String, Resource> byName = new TreeMap<String, Resource>();
+		for (Resource resource : available) {
+			if ((resource == null) || resource.loading)
+				continue;
+			Resource.AButton action = resource.layer(Resource.action);
+			if ((action == null) || (action.ad == null) || (action.ad.length < 2)
+					|| !action.ad[0].equals("craft"))
+				continue;
+			String key = normalize(action.name);
+			if ((key.length() > 0) && !byName.containsKey(key))
+				byName.put(key, resource);
+		}
+		found.addAll(byName.values());
+		return found;
+	}
+
 	public static synchronized List<Recipe> recipesUsing(String name,
 			String resource) {
 		String targetName = normalize(name);
@@ -812,6 +905,35 @@ public final class KnowledgeBase {
 		return found;
 	}
 
+	/** Opens the live crafting page for an indexed recipe when it is unlocked. */
+	public static synchronized boolean openRecipe(UI ui, String recipeId) {
+		if ((ui == null) || (ui.sess == null) || (ui.sess.glob == null)
+				|| (ui.menugrid == null))
+			return false;
+		syncAvailableRecipes(ui);
+		Recipe recipe = recipeById(recipeId);
+		if (recipe == null)
+			return false;
+		Collection<Resource> available;
+		synchronized (ui.sess.glob.paginae) {
+			available = new ArrayList<Resource>(ui.sess.glob.paginae);
+		}
+		for (Resource resource : available) {
+			if ((resource == null) || resource.loading)
+				continue;
+			Resource.AButton action = resource.layer(Resource.action);
+			if ((action == null) || (action.ad == null) || (action.ad.length < 2)
+					|| !action.ad[0].equals("craft"))
+				continue;
+			if (resource.name.equals(recipe.actionResource)
+					|| normalize(action.name).equals(normalize(recipe.name))) {
+				ui.menugrid.use(resource);
+				return true;
+			}
+		}
+		return false;
+	}
+
 	public static synchronized Document reverseDocument(String name,
 			String resource) {
 		List<Recipe> found = recipesUsing(name, resource);
@@ -821,8 +943,11 @@ public final class KnowledgeBase {
 			body.append("No indexed recipe currently uses this item. Open recipes in the crafting menu once so their exact server-supplied ingredients can be saved locally.");
 		} else {
 			body.append("The following locally indexed recipes use this item:\n\n");
-			for (Recipe recipe : found)
-				body.append("- ").append(link(recipe.id(), q(recipe.name))).append("\n");
+			for (Recipe recipe : found) {
+				body.append("- ").append(link(recipe.id(), q(recipe.name)))
+						.append("   ").append(actionLink("craft:" + recipe.id(),
+								"Open crafting")).append("\n");
+			}
 		}
 		body.append("\n$col[170,170,170]{This index is offline and contains recipes discovered by this client installation.}");
 		return new Document("reverse", "Used for: " + name, RECIPES,
@@ -892,6 +1017,8 @@ public final class KnowledgeBase {
 	private static Document recipeDocument(Recipe recipe) {
 		StringBuilder body = new StringBuilder();
 		body.append("$size[15]{$b{").append(q(recipe.name)).append("}}\n\n");
+		body.append(actionLink("craft:" + recipe.id(), "Open crafting"))
+				.append("\n\n");
 		if (recipe.description.length() > 0)
 			body.append(recipe.description).append("\n\n");
 		if (recipe.requirements.length() > 0)
@@ -979,8 +1106,8 @@ public final class KnowledgeBase {
 			while ((line = reader.readLine()) != null) {
 				if ((line.length() == 0) || line.startsWith("#"))
 					continue;
-				String[] values = line.split("\\|", 5);
-				if (values.length != 5)
+				String[] values = line.split("\\|", 6);
+				if ((values.length < 5) || (values.length > 6))
 					continue;
 				try {
 					Recipe recipe = recipeFor(decode(values[0]));
@@ -988,6 +1115,8 @@ public final class KnowledgeBase {
 					recipe.requirements = decode(values[2]);
 					recipe.inputs = unpackIngredients(values[3]);
 					recipe.outputs = unpackIngredients(values[4]);
+					if (values.length > 5)
+						recipe.actionResource = decode(values[5]);
 				} catch (Exception e) {
 				}
 			}
@@ -1009,7 +1138,7 @@ public final class KnowledgeBase {
 		try {
 			writer = new BufferedWriter(new OutputStreamWriter(
 					new FileOutputStream(temporary), "UTF-8"));
-			writer.write("# Solaris offline recipe index v1");
+			writer.write("# Solaris offline recipe index v2");
 			writer.newLine();
 			for (Recipe recipe : recipes.values()) {
 				writer.write(encode(recipe.name));
@@ -1021,6 +1150,8 @@ public final class KnowledgeBase {
 				writer.write(packIngredients(recipe.inputs));
 				writer.write('|');
 				writer.write(packIngredients(recipe.outputs));
+				writer.write('|');
+				writer.write(encode(recipe.actionResource));
 				writer.newLine();
 			}
 		} catch (IOException e) {

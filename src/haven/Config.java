@@ -132,6 +132,7 @@ public class Config {
 	public static int explanationLevel = 1;
 	public static boolean showObjectContext = true;
 	public static boolean showItemContext = true;
+	public static boolean showItemRecipeMenu = true;
 	public static boolean showEquipmentComparison = true;
 	public static boolean showTerminologyLinks = true;
 	public static boolean showInventoryCategories = true;
@@ -542,6 +543,8 @@ public class Config {
 				.equals("true");
 		showItemContext = options.getProperty("showItemContext", "true").equals(
 				"true");
+		showItemRecipeMenu = options.getProperty("showItemRecipeMenu", "true")
+				.equals("true");
 		showEquipmentComparison = options.getProperty("showEquipmentComparison",
 				"true").equals("true");
 		showTerminologyLinks = options.getProperty("showTerminologyLinks", "true")
@@ -742,6 +745,8 @@ public class Config {
 		options.setProperty("showObjectContext", showObjectContext ? "true"
 				: "false");
 		options.setProperty("showItemContext", showItemContext ? "true" : "false");
+		options.setProperty("showItemRecipeMenu", showItemRecipeMenu ? "true"
+				: "false");
 		options.setProperty("showEquipmentComparison", showEquipmentComparison
 				? "true" : "false");
 		options.setProperty("showTerminologyLinks", showTerminologyLinks ? "true"

@@ -715,6 +715,13 @@ public class OptWnd extends Window {
 					Config.saveOptions();
 				}
 			}).a = Config.showBreadcrumbTrail;
+			(new CheckBox(new Coord(260, 245), tab,
+					"Right-click item recipe menu") {
+				public void changed(boolean val) {
+					Config.showItemRecipeMenu = val;
+					Config.saveOptions();
+				}
+			}).a = Config.showItemRecipeMenu;
 			(new CheckBox(new Coord(10, 275), tab, "Hotkey overlay (Ctrl+Shift+F1)") {
 				public void changed(boolean val) {
 					Config.showHotkeyOverlay = val;
@@ -768,8 +775,8 @@ public class OptWnd extends Window {
 					KnowledgeWindow.open(ui, "home");
 				}
 			};
-			new Label(new Coord(35, 476), tab,
-					"Shift-hover: details | Middle-click: reverse recipes | Ctrl+Shift+P: planner");
+			new Label(new Coord(20, 476), tab,
+					"Right-click: item actions | Middle-click: reverse recipes | Ctrl+Shift+P: planner");
 		}
 
 	new Frame(new Coord(0, 0), new Coord(0, 0), this);
