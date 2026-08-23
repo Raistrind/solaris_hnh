@@ -1000,7 +1000,12 @@ public final class Specialization {
 		if (player == null)
 			return false;
 		Coord tile = player.position().div(MCache.tileSize);
-		WorldMapMarkerStore.getShared().add(tile, "Goal: " + clean(title),
+		MiniMap.MapAnchor anchor = MiniMap.anchorForSessionTile(ui.sess.glob.map,
+				tile);
+		if (anchor == null)
+			return false;
+		WorldMapMarkerStore.getShared().add(anchor.gridName, anchor.offset,
+				"Goal: " + clean(title),
 				new Color(255, 205, 70));
 		return true;
 	}

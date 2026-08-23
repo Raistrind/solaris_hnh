@@ -59,7 +59,7 @@ public class MiniMap extends Widget {
 	static Map<String, Tex> grids = new WeakHashMap<String, Tex>();
 	static Set<String> loading = new HashSet<String>();
 	static Loader loader = new Loader();
-	static Coord mappingStartPoint = null;
+	static volatile Coord mappingStartPoint = null;
 	static long mappingSession = 0;
 	static Map<String, Coord> gridsHashes = java.util.Collections
 			.synchronizedMap(new TreeMap<String, Coord>());
@@ -68,7 +68,7 @@ public class MiniMap extends Widget {
 	static Map<Coord, Tex> caveTex = new TreeMap<Coord, Tex>();
 	private static final PersistentMapStore persistentMap =
 			new PersistentMapStore(new File("map/persistent"));
-	private static boolean awaitingPersistentAnchor = false;
+	private static volatile boolean awaitingPersistentAnchor = false;
 	private static int persistentAnchorFrames = 0;
 	public static final Tex bg = Resource.loadtex("gfx/hud/mmap/ptex");
 	public static final Tex nomap = Resource.loadtex("gfx/hud/mmap/nomap");
@@ -80,6 +80,17 @@ public class MiniMap extends Widget {
 	private final boolean primary;
 	public int scale = 4;
 	double scales[] = { 0.5, 0.66, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2 };
+
+	/** A tile position bound to the stable identity of a saved map PNG. */
+	public static final class MapAnchor {
+		public final String gridName;
+		public final Coord offset;
+
+		public MapAnchor(String gridName, Coord offset) {
+			this.gridName = gridName;
+			this.offset = new Coord(offset);
+		}
+	}
 
 	/* New minimap functions */
 	public Set<Pair<Coord, Color>> profits = new HashSet<Pair<Coord, Color>>();
@@ -94,6 +105,63 @@ public class MiniMap extends Widget {
 
 	public void setScale(int scale) {
 		this.scale = Math.max(0, Math.min(scale, scales.length - 1));
+	}
+
+	private static Coord persistentMappingOrigin() {
+		Coord origin = mappingStartPoint;
+		if (!Config.autoSaveMinimaps || awaitingPersistentAnchor ||
+				(origin == null))
+			return null;
+		return new Coord(origin);
+	}
+
+	/**
+	 * Binds a session-local tile to the grid name used by the persistent map
+	 * PNG. Session coordinates change after reconnecting; the grid name and the
+	 * offset inside that grid do not.
+	 */
+	public static MapAnchor anchorForSessionTile(MCache map, Coord sessionTile) {
+		if ((map == null) || (sessionTile == null))
+			return null;
+		Coord origin = persistentMappingOrigin();
+		if (origin == null)
+			return null;
+		Coord sessionGrid = sessionTile.div(cmaps);
+		Coord persistentGrid = sessionGrid.sub(origin);
+		String gridName = coordHashes.get(persistentGrid);
+		if (gridName == null) {
+			synchronized (map.req) {
+				synchronized (map.grids) {
+					Grid grid = map.grids.get(sessionGrid);
+					if (grid != null)
+						gridName = grid.mnm;
+				}
+			}
+			Coord saved = (gridName == null) ? null : gridsHashes.get(gridName);
+			if ((saved == null) || !saved.equals(persistentGrid))
+				return null;
+		}
+		return new MapAnchor(gridName, sessionTile.mod(cmaps));
+	}
+
+	/** Returns this PNG-bound position in the persistent atlas coordinate space. */
+	public static Coord persistentTileForAnchor(String gridName, Coord offset) {
+		if ((gridName == null) || (offset == null))
+			return null;
+		Coord persistentGrid = gridsHashes.get(gridName);
+		if (persistentGrid == null)
+			return null;
+		return persistentGrid.mul(cmaps).add(offset.mod(cmaps));
+	}
+
+	/** Converts a PNG-bound position back to the current session coordinates. */
+	public static Coord sessionTileForAnchor(String gridName, Coord offset) {
+		Coord origin = persistentMappingOrigin();
+		Coord persistentGrid = (gridName == null) ? null : gridsHashes
+				.get(gridName);
+		if ((origin == null) || (persistentGrid == null) || (offset == null))
+			return null;
+		return persistentGrid.add(origin).mul(cmaps).add(offset.mod(cmaps));
 	}
 
 	static class Loader implements Runnable {

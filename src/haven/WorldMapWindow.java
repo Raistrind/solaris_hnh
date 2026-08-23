@@ -40,6 +40,9 @@ public class WorldMapWindow extends Window {
 	private String lastSearch = null;
 	private String lastStatus = null;
 	private WorldMapMarkerStore.Marker selected;
+	private WorldMapMarkerStore.Marker relocating;
+	private String notice;
+	private long noticeUntil;
 
 	public static void toggle(UI ui) {
 		if ((ui == null) || (ui.sess == null) || (ui.mapview == null))
@@ -106,19 +109,38 @@ public class WorldMapWindow extends Window {
 
 		centerMarkerButton = new Button(Coord.z, 90, this, "Center") {
 			public void click() {
-				if (selected != null)
-					canvas.centerOnTile(selected.tc);
+				if (selected == null)
+					return;
+				if (!selected.anchored()) {
+					relocating = selected;
+					showNotice("Right-click this marker's correct map position.");
+					return;
+				}
+				Coord tile = markerSessionTile(selected);
+				if (tile != null)
+					canvas.centerOnTile(tile);
+				else
+					showNotice("The saved map position is not available yet.");
 			}
 		};
 		editButton = new Button(Coord.z, 90, this, "Edit") {
 			public void click() {
 				if (selected != null)
-					openMarkerEditor(selected, selected.tc);
+					openMarkerEditor(selected, anchorForMarker(selected));
 			}
 		};
 		waypointButton = new Button(Coord.z, 90, this, "Set waypoint") {
 			public void click() {
 				if (selected != null) {
+					if (!selected.anchored()) {
+						if (selected.waypoint) {
+							markerStore.setWaypoint(selected);
+							refreshMarkers();
+							return;
+						}
+						showNotice("Re-place this marker before using it as a waypoint.");
+						return;
+					}
 					markerStore.setWaypoint(selected);
 					refreshMarkers();
 				}
@@ -178,6 +200,36 @@ public class WorldMapWindow extends Window {
 		return (player == null) ? null : player.position().div(tileSize);
 	}
 
+	private MiniMap.MapAnchor anchorForTile(Coord tile) {
+		if ((tile == null) || (ui.sess == null))
+			return null;
+		return MiniMap.anchorForSessionTile(ui.sess.glob.map, tile);
+	}
+
+	private MiniMap.MapAnchor anchorForMarker(
+			WorldMapMarkerStore.Marker marker) {
+		if ((marker == null) || !marker.anchored())
+			return null;
+		return new MiniMap.MapAnchor(marker.gridName, marker.gridOffset);
+	}
+
+	private Coord markerSessionTile(WorldMapMarkerStore.Marker marker) {
+		return ((marker == null) || !marker.anchored()) ? null
+				: MiniMap.sessionTileForAnchor(marker.gridName, marker.gridOffset);
+	}
+
+	private Coord markerPersistentTile(WorldMapMarkerStore.Marker marker) {
+		return ((marker == null) || !marker.anchored()) ? null
+				: MiniMap.persistentTileForAnchor(marker.gridName,
+						marker.gridOffset);
+	}
+
+	private Coord playerPersistentTile() {
+		MiniMap.MapAnchor anchor = anchorForTile(playerTile());
+		return (anchor == null) ? null : MiniMap.persistentTileForAnchor(
+				anchor.gridName, anchor.offset);
+	}
+
 	private void centerPlayer() {
 		Coord player = playerTile();
 		if (player != null)
@@ -185,12 +237,16 @@ public class WorldMapWindow extends Window {
 	}
 
 	private void selectMarker(WorldMapMarkerStore.Marker marker) {
+		if (relocating != marker)
+			relocating = null;
 		selected = marker;
 		markerList.selected = marker;
 		updateWaypointButton();
 	}
 
 	private void updateWaypointButton() {
+		centerMarkerButton.change((selected != null) && !selected.anchored()
+				? "Re-place" : "Center", Color.WHITE);
 		waypointButton.change((selected != null) && selected.waypoint
 				? "Clear waypoint" : "Set waypoint", Color.WHITE);
 	}
@@ -205,9 +261,16 @@ public class WorldMapWindow extends Window {
 		updateWaypointButton();
 	}
 
-	private void openMarkerEditor(WorldMapMarkerStore.Marker marker, Coord tc) {
+	private void openMarkerEditor(WorldMapMarkerStore.Marker marker,
+			MiniMap.MapAnchor anchor) {
 		new MarkerEditor(MainFrame.getCenterPoint().sub(150, 80), ui.root,
-				marker, tc);
+				marker, anchor);
+	}
+
+	private void showNotice(String text) {
+		notice = text;
+		noticeUntil = System.currentTimeMillis() + 6000;
+		lastStatus = null;
 	}
 
 	private void confirmDeleteSelected() {
@@ -229,14 +292,20 @@ public class WorldMapWindow extends Window {
 
 	private void updateStatus() {
 		WorldMapMarkerStore.Marker waypoint = markerStore.waypoint();
-		Coord player = playerTile();
+		Coord player = playerPersistentTile();
 		String text;
-		if ((waypoint != null) && (player != null)) {
-			long distance = Math.round(player.dist(waypoint.tc));
+		if ((notice != null) && (System.currentTimeMillis() < noticeUntil)) {
+			text = notice;
+		} else if ((waypoint != null) && waypoint.anchored() &&
+				(player != null) && (markerPersistentTile(waypoint) != null)) {
+			Coord waypointTile = markerPersistentTile(waypoint);
+			long distance = Math.round(player.dist(waypointTile));
 			text = "Waypoint: " + waypoint.name + " - " + distance
-					+ " tiles " + direction(player, waypoint.tc);
+					+ " tiles " + direction(player, waypointTile);
+		} else if ((selected != null) && !selected.anchored()) {
+			text = "This old marker needs re-placement before it can be mapped.";
 		} else if (canvas.mouseTile != null) {
-			text = "Map tile: " + canvas.mouseTile;
+			text = "Map position: " + canvas.mouseTile;
 		} else {
 			text = "No active waypoint";
 		}
@@ -329,7 +398,8 @@ public class WorldMapWindow extends Window {
 			this.markers = markers;
 			labels = new ArrayList<Text>();
 			for (WorldMapMarkerStore.Marker marker : markers) {
-				String label = marker.name + (marker.waypoint ? " [waypoint]" : "");
+				String label = marker.name + (marker.anchored() ? ""
+						: " [re-place]") + (marker.waypoint ? " [waypoint]" : "");
 				labels.add(LIST_FONT.render(label));
 			}
 			clampScroll();
@@ -401,14 +471,18 @@ public class WorldMapWindow extends Window {
 		protected void drawMapOverlay(GOut g, Coord tc, Coord hsz) {
 			WorldMapMarkerStore.Marker waypoint = markerStore.waypoint();
 			Coord player = playerTile();
-			if ((waypoint != null) && (player != null)) {
+			Coord waypointTile = markerSessionTile(waypoint);
+			if ((waypointTile != null) && (player != null)) {
 				g.chcolor(new Color(255, 255, 0, 180));
-				g.line(player.sub(tc).add(hsz.div(2)), waypoint.tc.sub(tc).add(
+				g.line(player.sub(tc).add(hsz.div(2)), waypointTile.sub(tc).add(
 						hsz.div(2)), 2);
 			}
 
 			for (WorldMapMarkerStore.Marker marker : markerStore.markers()) {
-				Coord mc = marker.tc.sub(tc).add(hsz.div(2));
+				Coord markerTile = markerSessionTile(marker);
+				if (markerTile == null)
+					continue;
+				Coord mc = markerTile.sub(tc).add(hsz.div(2));
 				if (!mc.isect(new Coord(-40, -20), hsz.add(80, 40)))
 					continue;
 				int radius = (marker == selected) ? 6 : 4;
@@ -434,7 +508,10 @@ public class WorldMapWindow extends Window {
 			WorldMapMarkerStore.Marker found = null;
 			double closest = Double.MAX_VALUE;
 			for (WorldMapMarkerStore.Marker marker : markerStore.markers()) {
-				double distance = tileToLocal(marker.tc).dist(c);
+				Coord markerTile = markerSessionTile(marker);
+				if (markerTile == null)
+					continue;
+				double distance = tileToLocal(markerTile).dist(c);
 				if ((distance <= 10) && (distance < closest)) {
 					found = marker;
 					closest = distance;
@@ -451,16 +528,29 @@ public class WorldMapWindow extends Window {
 				ui.grabmouse(this);
 				return true;
 			} else if (button == 3) {
+				MiniMap.MapAnchor clicked = anchorForTile(localToTile(c));
+				if (clicked == null) {
+					showNotice("That saved map position is not available yet.");
+					return true;
+				}
+				if (relocating != null) {
+					WorldMapMarkerStore.Marker marker = relocating;
+					relocating = null;
+					openMarkerEditor(marker, clicked);
+					return true;
+				}
 				WorldMapMarkerStore.Marker marker = markerAt(c);
-				openMarkerEditor(marker, (marker == null) ? localToTile(c)
-						: marker.tc);
+				openMarkerEditor(marker, (marker == null) ? clicked
+						: anchorForMarker(marker));
 				return true;
 			}
 			return false;
 		}
 
 		public void mousemove(Coord c) {
-			mouseTile = localToTile(c);
+			MiniMap.MapAnchor anchor = anchorForTile(localToTile(c));
+			mouseTile = (anchor == null) ? null : MiniMap.persistentTileForAnchor(
+					anchor.gridName, anchor.offset);
 			if (dragging) {
 				Coord delta = dragOrigin.sub(c);
 				if (delta.dist(Coord.z) > 1)
@@ -491,28 +581,30 @@ public class WorldMapWindow extends Window {
 			WorldMapMarkerStore.Marker marker = markerAt(c);
 			if (marker == null)
 				return null;
-			Coord player = playerTile();
-			if (player == null)
-				return marker.name + " " + marker.tc;
-			return marker.name + " - " + Math.round(player.dist(marker.tc))
-					+ " tiles " + direction(player, marker.tc);
+			Coord player = playerPersistentTile();
+			Coord markerTile = markerPersistentTile(marker);
+			if ((player == null) || (markerTile == null))
+				return marker.name;
+			return marker.name + " - " + Math.round(player.dist(markerTile))
+					+ " tiles " + direction(player, markerTile);
 		}
 	}
 
 	private class MarkerEditor extends Window {
 		private final WorldMapMarkerStore.Marker marker;
-		private final Coord markerTile;
+		private final MiniMap.MapAnchor markerAnchor;
 		private final TextEntry name;
 		private final Button[] colorButtons = new Button[MARKER_COLORS.length];
 		private Color selectedColor;
 
 		MarkerEditor(Coord c, Widget parent,
-				WorldMapMarkerStore.Marker marker, Coord markerTile) {
+				WorldMapMarkerStore.Marker marker, MiniMap.MapAnchor markerAnchor) {
 			super(c, new Coord(310, 125), parent, (marker == null) ? "Add Marker"
-					: "Edit Marker");
+					: (!marker.anchored() && (markerAnchor != null))
+							? "Re-place Marker" : "Edit Marker");
 			justclose = true;
 			this.marker = marker;
-			this.markerTile = new Coord(markerTile);
+			this.markerAnchor = markerAnchor;
 			selectedColor = (marker == null) ? Color.YELLOW : marker.color;
 			new Label(new Coord(0, 2), this, "Name:");
 			name = new TextEntry(new Coord(45, 0), new Coord(255, 20), this,
@@ -532,7 +624,11 @@ public class WorldMapWindow extends Window {
 					saveMarker();
 				}
 			};
-			new Label(new Coord(0, 105), this, "Tile: " + markerTile);
+			Coord mapTile = (markerAnchor == null) ? null
+					: MiniMap.persistentTileForAnchor(markerAnchor.gridName,
+							markerAnchor.offset);
+			new Label(new Coord(0, 105), this, (mapTile == null)
+					? "Position: needs re-placement" : "Map position: " + mapTile);
 			selectColor(indexOfColor(selectedColor));
 		}
 
@@ -555,10 +651,16 @@ public class WorldMapWindow extends Window {
 
 		private void saveMarker() {
 			WorldMapMarkerStore.Marker saved = marker;
-			if (saved == null)
-				saved = markerStore.add(markerTile, name.text, selectedColor);
-			else
-				markerStore.update(saved, name.text, selectedColor);
+			if (saved == null) {
+				if (markerAnchor == null)
+					return;
+				saved = markerStore.add(markerAnchor.gridName,
+						markerAnchor.offset, name.text, selectedColor);
+			} else {
+				markerStore.update(saved, (markerAnchor == null) ? null
+						: markerAnchor.gridName, (markerAnchor == null) ? null
+						: markerAnchor.offset, name.text, selectedColor);
+			}
 			refreshMarkers();
 			selectMarker(saved);
 			ui.destroy(this);

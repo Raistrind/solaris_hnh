@@ -104,7 +104,7 @@ public class SpecializationWindow extends Window {
 				if (Specialization.markCurrentLocation(ui, selected.title))
 					showStatus("Added a world-map marker at the current position.");
 				else
-					showStatus("Player position is not available yet.");
+					showStatus("Saved map position is not available yet.");
 			}
 		};
 
