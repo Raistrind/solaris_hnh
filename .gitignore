@@ -35,6 +35,10 @@
 *.ipr
 *.iws
 
+# Codex workspace metadata and local agent notes
+/.codex/
+*.md
+
 # Operating-system and temporary files
 .DS_Store
 Thumbs.db

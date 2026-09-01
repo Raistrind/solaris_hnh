@@ -210,6 +210,10 @@ public class Avaview extends Widget {
 		return null;
 	}
 
+	public boolean isEmptySlot() {
+		return none || ((myown == null) && (avagob < 0));
+	}
+
 	public boolean mousedown(Coord c, int button) {
 		wdgmsg("click", button);
 		return (true);

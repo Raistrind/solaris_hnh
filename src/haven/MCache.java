@@ -45,6 +45,10 @@ import java.util.zip.Inflater;
 
 public class MCache {
 	Tileset[] sets = null;
+	/* Retain the server-provided terrain resource identity alongside the
+	 * decoded tileset. Callers that need semantic terrain information must not
+	 * infer it from palette indices. */
+	String[] setnames = null;
 	Grid last = null;
 	java.util.Map<Coord, Grid> req = new TreeMap<Coord, Grid>();
 	java.util.Map<Coord, Grid> grids = new TreeMap<Coord, Grid>();
@@ -216,6 +220,7 @@ public class MCache {
 	public MCache(Session sess) {
 		this.sess = sess;
 		sets = new Tileset[256];
+		setnames = new String[256];
 		gen = new Random();
 	}
 
@@ -373,6 +378,11 @@ public class MCache {
 		if (tn == -1)
 			return (null);
 		return (sets[tn]);
+	}
+
+	public String gettileres(Coord tc) {
+		int tn = gettilen(tc);
+		return ((tn < 0) || (tn >= setnames.length)) ? null : setnames[tn];
 	}
 
 	public int getol(Coord tc) {
@@ -553,6 +563,7 @@ public class MCache {
 				resver = 6;
 			}
 			sets[id] = loadset(resnm, resver);
+			setnames[id] = resnm;
 		}
 	}
 

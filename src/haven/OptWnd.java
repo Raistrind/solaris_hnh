@@ -241,6 +241,31 @@ public class OptWnd extends Window {
 			}
 		}).a = Config.drawIcons;
 
+		(new CheckBox(new Coord(220, 330), tab,
+				"Show exterior map context in caves") {
+			public void changed(boolean val) {
+				Config.showInteriorWorldOverlay = val;
+				Config.saveOptions();
+			}
+		}).a = Config.showInteriorWorldOverlay;
+		new Label(new Coord(220, 355), tab, "Cave exterior-map opacity:");
+		final boolean[] interiorOverlayReady = { false };
+		final RadioGroup interiorOverlayOpacity = new RadioGroup(tab) {
+			public void changed(int btn, String lbl) {
+				if (interiorOverlayReady[0]) {
+					Config.interiorWorldOverlayOpacity = new int[] { 64, 96, 144 }[btn];
+					Config.saveOptions();
+				}
+			}
+		};
+		interiorOverlayOpacity.add("25%", new Coord(220, 380));
+		interiorOverlayOpacity.add("40%", new Coord(300, 380));
+		interiorOverlayOpacity.add("60%", new Coord(380, 380));
+		int interiorOpacityIndex = (Config.interiorWorldOverlayOpacity >= 120) ? 2
+				: ((Config.interiorWorldOverlayOpacity >= 80) ? 1 : 0);
+		interiorOverlayOpacity.check(interiorOpacityIndex);
+		interiorOverlayReady[0] = true;
+
 	}
 
 	{ /* SCALING TAB */
@@ -730,6 +755,15 @@ public class OptWnd extends Window {
 					Config.saveOptions();
 				}
 			}).a = Config.showHotkeyOverlay;
+			CheckBox quickDepositToCart = new CheckBox(new Coord(260, 275), tab,
+					"Quick-deposit held items into carts") {
+				public void changed(boolean val) {
+					Config.quickDepositToCart = val;
+					Config.saveOptions();
+				}
+			};
+			quickDepositToCart.a = Config.quickDepositToCart;
+			quickDepositToCart.tooltip = "With a Cart window open, right-click its cart while holding an item to place it in the first available slot.";
 
 			new Label(new Coord(10, 310), tab, "Specialization paths (optional):");
 			new Button(new Coord(10, 332), 135, tab, "Choose primary") {

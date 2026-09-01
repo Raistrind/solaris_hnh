@@ -61,15 +61,97 @@ public class MiniMap extends Widget {
 	static Loader loader = new Loader();
 	static volatile Coord mappingStartPoint = null;
 	static long mappingSession = 0;
+	/* Quality-survey anchors are resolved against the current session origin.
+	 * Consumers cache their projected coordinates, so make every change of that
+	 * origin (including a new unresolved session) observable. */
+	private static volatile long mappingRevision = 0;
 	static Map<String, Coord> gridsHashes = java.util.Collections
 			.synchronizedMap(new TreeMap<String, Coord>());
 	static Map<Coord, String> coordHashes = java.util.Collections
 			.synchronizedMap(new TreeMap<Coord, String>());
 	static Map<Coord, Tex> caveTex = new TreeMap<Coord, Tex>();
+	/* Persistence conflicts are encountered from the render loop until the
+	 * conflicting tile is resolved. Keep the first diagnostic, but do not print
+	 * the same coordinate/hash pair every frame. */
+	private static final Set<String> reportedPersistenceConflicts =
+			java.util.Collections.synchronizedSet(new HashSet<String>());
 	private static final PersistentMapStore persistentMap =
 			new PersistentMapStore(new File("map/persistent"));
+	private static final QualitySurveyStore qualitySurvey =
+			new QualitySurveyStore(new File("map/persistent"));
 	private static volatile boolean awaitingPersistentAnchor = false;
-	private static int persistentAnchorFrames = 0;
+	private static volatile String persistentAnchorStatus = "Map position unresolved";
+	/** A plausible water-pattern origin which was deliberately not applied
+	 * automatically. Accepting it changes the current coordinate transform; a
+	 * complete accepted match may also refresh the corresponding saved tiles. */
+	public static final class PersistentAnchorSuggestion {
+		public final Coord origin;
+		public final int matchedGrids;
+		public final double confidence;
+		public final double secondConfidence;
+		public final boolean ambiguous;
+		public final boolean lowConfidence;
+		private PersistentAnchorSuggestion(PersistentMapStore.WaterAnchorMatch match) {
+			origin = new Coord(match.origin);
+			matchedGrids = match.grids;
+			confidence = match.confidence;
+			secondConfidence = match.secondConfidence;
+			ambiguous = (secondConfidence >= 0.0) &&
+					((confidence - secondConfidence) < 0.02);
+			lowConfidence = confidence < 0.96;
+		}
+		private PersistentAnchorSuggestion(PersistentMapStore.DetailedAnchorMatch match) {
+			origin = new Coord(match.origin);
+			matchedGrids = match.grids;
+			confidence = match.confidence;
+			secondConfidence = match.secondConfidence;
+			ambiguous = (secondConfidence >= 0.0) &&
+					((confidence - secondConfidence) < 0.02);
+			lowConfidence = confidence < 0.90;
+		}
+	}
+	private static volatile PersistentAnchorSuggestion persistentAnchorSuggestion = null;
+	private static volatile Coord dismissedSuggestionOrigin = null;
+	/* A complete accepted detailed match authorizes replacing refreshed tile
+	 * identities only within the matched session-local 3x3 neighbourhood. */
+	private static volatile Coord detailedReplacementCenter = null;
+	/* A reconnect gives the client only session-local grid coordinates. Keep a
+	 * bounded, invisible surface-water observation buffer until it can safely be
+	 * matched to the saved atlas. These observations are never persisted. */
+	private static final int UNANCHORED_WATER_BUFFER_LIMIT = 64;
+	private static final TreeMap<Coord, PersistentMapStore.WaterPattern>
+			unanchoredWaterPatterns = new TreeMap<Coord, PersistentMapStore.WaterPattern>();
+	/* Matching the temporary sample against the saved atlas is intentionally
+	 * incremental. resolvePersistentAnchor() runs from the render loop, so do
+	 * not rescan every saved PNG on every frame when the observed 3x3 has not
+	 * changed. */
+	private static int unanchoredWaterPatternRevision = 0;
+	private static int lastWaterAnchorMatchRevision = -1;
+	/* Detailed 3x3 samples use the same PNG-backed image as the minimap.
+	 * The expensive saved-atlas comparison is done once per changed observation
+	 * in a worker, never in MiniMap.draw(). */
+	private static final TreeMap<Coord, PersistentMapStore.DetailedPattern>
+			unanchoredDetailedPatterns = new TreeMap<Coord, PersistentMapStore.DetailedPattern>();
+	private static final int UNANCHORED_DETAILED_BUFFER_LIMIT = 64;
+	private static int unanchoredDetailedPatternRevision = 0;
+	private static int lastLoggedDetailedPatternRevision = -1;
+	private static int lastDetailedAnchorMatchRevision = -1;
+	private static volatile Coord lastDetailedAnchorMatchCenter = null;
+	private static volatile PersistentMapStore.DetailedAnchorMatch detailedAnchorResult = null;
+	private static volatile int detailedAnchorResultRevision = -1;
+	private static volatile Coord detailedAnchorResultCenter = null;
+	private static volatile boolean detailedAnchorWorkerRunning = false;
+	/* Session-only cave entrance context. Cave grids are never assigned an
+	 * inferred durable world coordinate. */
+	private static volatile MapAnchor exteriorContextAnchor = null;
+	private static volatile Coord exteriorContextTile = null;
+	private static volatile Coord interiorEntranceTile = null;
+	/* Set when a cave transition is observed before the player gob has supplied
+	 * a usable tile. It keeps capture retryable without persisting any link. */
+	private static volatile boolean interiorEntrancePending = false;
+	/* Only the primary minimap may establish interior state. The world-map
+	 * canvas is another MiniMap instance and must never alter session state. */
+	private static volatile boolean primaryInterior = false;
 	public static final Tex bg = Resource.loadtex("gfx/hud/mmap/ptex");
 	public static final Tex nomap = Resource.loadtex("gfx/hud/mmap/nomap");
 	public static final Resource plx = Resource.load("gfx/hud/mmap/x");
@@ -115,6 +197,74 @@ public class MiniMap extends Widget {
 		return new Coord(origin);
 	}
 
+	public static String persistentAnchorStatus() {
+		return persistentAnchorStatus;
+	}
+	public static PersistentAnchorSuggestion persistentAnchorSuggestion() {
+		return persistentAnchorSuggestion;
+	}
+	public static boolean acceptPersistentAnchorSuggestion() {
+		PersistentAnchorSuggestion suggestion = persistentAnchorSuggestion;
+		if (!Config.autoSaveMinimaps || !awaitingPersistentAnchor ||
+				primaryInterior || (suggestion == null))
+			return false;
+		mappingStartPoint = new Coord(suggestion.origin);
+		awaitingPersistentAnchor = false;
+		persistentAnchorSuggestion = null;
+		dismissedSuggestionOrigin = null;
+		detailedReplacementCenter = (detailedAnchorResultCenter == null) ? null
+				: new Coord(detailedAnchorResultCenter);
+		changedMappingAnchor();
+		persistentAnchorStatus = "Persistent map anchored from accepted detailed-map suggestion";
+		System.out.println("[PersistentMap] accepted anchor suggestion: origin=" +
+				suggestion.origin + ", score=" +
+				String.format(java.util.Locale.US, "%.2f%%", suggestion.confidence * 100.0) +
+				", compared=" + suggestion.matchedGrids + " tiles");
+		return true;
+	}
+	public static void dismissPersistentAnchorSuggestion() {
+		PersistentAnchorSuggestion suggestion = persistentAnchorSuggestion;
+		if (suggestion != null)
+			dismissedSuggestionOrigin = new Coord(suggestion.origin);
+		if (suggestion != null)
+			System.out.println("[PersistentMap] dismissed anchor suggestion: origin=" +
+					suggestion.origin + ", score=" +
+					String.format(java.util.Locale.US, "%.2f%%", suggestion.confidence * 100.0));
+		persistentAnchorSuggestion = null;
+		if (awaitingPersistentAnchor)
+			persistentAnchorStatus = "Suggested map location dismissed; continuing to explore";
+	}
+	public static long mappingRevision() { return mappingRevision; }
+	private static void changedMappingAnchor() { mappingRevision++; }
+	public static boolean isPrimaryInterior() { return primaryInterior; }
+	public static void armQualitySurvey(MCache map, Coord tile, String type) { qualitySurvey.arm(anchorForSessionTile(map, tile), type); }
+	public static void clearQualitySurveyPending() { qualitySurvey.clearPending(); }
+	public static long observeQualitySurvey(Item item) { return qualitySurvey.observe(item); }
+	public static void noteQualitySurveyItemCreated(Item item) { qualitySurvey.noteItemCreated(item); }
+	public static void cancelQualitySurveyForInventoryMove(Item item) { qualitySurvey.cancelForInventoryMove(item); }
+
+	/** Returns the last confirmed exterior atlas tile from this session. */
+	public static Coord exteriorContextTile() {
+		Coord tile = exteriorContextTile;
+		return (tile == null) ? null : new Coord(tile);
+	}
+
+	/** Session-local cave tile occupied when the current interior was entered. */
+	public static Coord interiorEntranceTile() {
+		Coord tile = interiorEntranceTile;
+		return (tile == null) ? null : new Coord(tile);
+	}
+
+	private static void rememberExteriorAnchor(MapAnchor anchor) {
+		if (anchor == null)
+			return;
+		Coord tile = persistentTileForAnchor(anchor.gridName, anchor.offset);
+		if (tile == null)
+			return;
+		exteriorContextAnchor = new MapAnchor(anchor.gridName, anchor.offset);
+		exteriorContextTile = new Coord(tile);
+	}
+
 	/**
 	 * Binds a session-local tile to the grid name used by the persistent map
 	 * PNG. Session coordinates change after reconnecting; the grid name and the
@@ -122,6 +272,8 @@ public class MiniMap extends Widget {
 	 */
 	public static MapAnchor anchorForSessionTile(MCache map, Coord sessionTile) {
 		if ((map == null) || (sessionTile == null))
+			return null;
+		if (primaryInterior)
 			return null;
 		Coord origin = persistentMappingOrigin();
 		if (origin == null)
@@ -278,20 +430,59 @@ public class MiniMap extends Widget {
 	}
 
 	public static void newMappingSession() {
+		qualitySurvey.clearPending();
+		changedMappingAnchor();
 		long newSession = System.currentTimeMillis();
 		String date = Utils.sessdate(newSession);
 		mappingSession = newSession;
 		mappingStartPoint = null;
+		persistentAnchorSuggestion = null;
+		dismissedSuggestionOrigin = null;
 		gridsHashes.clear();
 		coordHashes.clear();
+		reportedPersistenceConflicts.clear();
+		synchronized (unanchoredWaterPatterns) {
+			unanchoredWaterPatterns.clear();
+		}
+		synchronized (unanchoredDetailedPatterns) {
+			unanchoredDetailedPatterns.clear();
+		}
+		unanchoredWaterPatternRevision = 0;
+		lastWaterAnchorMatchRevision = -1;
+		unanchoredDetailedPatternRevision = 0;
+		lastLoggedDetailedPatternRevision = -1;
+		lastDetailedAnchorMatchRevision = -1;
+		lastDetailedAnchorMatchCenter = null;
+		detailedAnchorResult = null;
+		detailedAnchorResultRevision = -1;
+		detailedAnchorResultCenter = null;
+		detailedAnchorWorkerRunning = false;
+		synchronized (caveTex) {
+			caveTex.clear();
+		}
 		awaitingPersistentAnchor = false;
-		persistentAnchorFrames = 0;
+		persistentAnchorStatus = "Map position unresolved";
+		exteriorContextAnchor = null;
+		exteriorContextTile = null;
+		interiorEntranceTile = null;
+		interiorEntrancePending = false;
+		primaryInterior = false;
+		detailedReplacementCenter = null;
 		if (!Config.autoSaveMinimaps)
 			return;
 		try {
 			prepareSessionDirectory(date);
 			persistentMap.loadInto(gridsHashes, coordHashes);
-			awaitingPersistentAnchor = !gridsHashes.isEmpty();
+			/* Complete any survey identity migration left behind by a crash. The
+			 * journal is replayed only when the atlas already contains the new hash
+			 * and no longer contains the old one, so a pre-replacement crash is safe
+			 * to retry on the next confirmed replacement. */
+			qualitySurvey.replayPendingMigrations(gridsHashes);
+			System.out.println("[PersistentMap] started mapping session " + date +
+					": atlas records=" + gridsHashes.size());
+			/* Always wait for a loaded grid identity. A session-local coordinate is
+			 * never a durable anchor, even for an empty persistent atlas. */
+			awaitingPersistentAnchor = true;
 		} catch (IOException ex) {
 			System.out.println("Could not initialize persistent minimap: " + ex);
 		}
@@ -435,51 +626,336 @@ public class MiniMap extends Widget {
 	private void resolvePersistentAnchor(Coord centerGrid) {
 		if (!Config.autoSaveMinimaps || !awaitingPersistentAnchor)
 			return;
-		Coord knownGrid = null;
-		Coord knownCoordinate = null;
-		boolean centerAvailable = false;
+		Grid newComponentGrid = null;
+		Coord newComponentCoordinate = null;
 		synchronized (ui.sess.glob.map.req) {
 			synchronized (ui.sess.glob.map.grids) {
-				for (int radius = 0; (radius <= 2) && (knownGrid == null);
-						radius++) {
-					for (int y = -radius; (y <= radius) &&
-							(knownGrid == null); y++) {
+				for (int radius = 0; radius <= 2; radius++) {
+					for (int y = -radius; y <= radius; y++) {
 						for (int x = -radius; x <= radius; x++) {
 							Coord gridCoordinate = centerGrid.add(x, y);
 							Grid candidate = ui.sess.glob.map.grids
 									.get(gridCoordinate);
-							if ((x == 0) && (y == 0) &&
-									(candidate != null))
-								centerAvailable = true;
 							if ((candidate == null) || (candidate.mnm == null))
 								continue;
-							Coord saved = gridsHashes.get(candidate.mnm);
-							if (saved != null) {
-								knownGrid = gridCoordinate;
-								knownCoordinate = saved;
-								break;
+							if ((x == 0) && (y == 0) &&
+									(newComponentGrid == null)) {
+								newComponentGrid = candidate;
+								newComponentCoordinate = gridCoordinate;
 							}
 						}
 					}
 				}
 			}
 		}
-		if (knownGrid != null) {
-			mappingStartPoint = knownGrid.sub(knownCoordinate);
-			awaitingPersistentAnchor = false;
-			persistentAnchorFrames = 0;
+		/* Grid names can change between sessions. Before refusing an existing
+		 * atlas, compare the visible detailed 3x3 PNG neighbourhood with every
+		 * saved centre tile and its saved neighbours. */
+		if (!gridsHashes.isEmpty()) {
+			Map<Coord, PersistentMapStore.DetailedPattern> observed =
+					collectUnanchoredDetailedPatterns(centerGrid);
+			if (lastLoggedDetailedPatternRevision != unanchoredDetailedPatternRevision) {
+				lastLoggedDetailedPatternRevision = unanchoredDetailedPatternRevision;
+				System.out.println("[PersistentMap] current detailed map neighbourhood: " +
+						observed.size() + "/9 tiles loaded, center=" + centerGrid);
+			}
+			if (observed.size() == 9) {
+				startDetailedAnchorMatch(centerGrid, observed);
+				applyDetailedAnchorMatchIfReady(centerGrid);
+				if (detailedAnchorWorkerRunning)
+					persistentAnchorStatus = "Comparing detailed 9/9 map neighbourhood with saved atlas (" +
+						persistentMap.detailedScanProgress() + "%)";
+			} else {
+				persistentAnchorStatus = "Loading complete detailed map neighbourhood for recovery (" +
+						observed.size() + "/9)";
+			}
 			return;
 		}
-		if (!centerAvailable || (++persistentAnchorFrames < 60))
+		/* An empty atlas has no earlier identity to match. Its first loaded
+		 * server grid is a confirmed new component; existing atlases stay
+		 * unresolved until a saved grid identity is seen. */
+		if ((newComponentGrid == null) || !gridsHashes.isEmpty()) {
+			persistentAnchorStatus = (newComponentGrid == null)
+					? "Waiting for a saved map tile to load"
+					: "Saved map tile not found; confirm Add map area for a disconnected atlas.";
 			return;
+		}
 		try {
 			Coord origin = persistentMap.nextComponentOrigin();
-			mappingStartPoint = centerGrid.sub(origin);
+			persistentMap.recordComponent(newComponentGrid.mnm, origin, "surface");
+			mappingStartPoint = newComponentCoordinate.sub(origin);
 			awaitingPersistentAnchor = false;
+			changedMappingAnchor();
+			persistentAnchorStatus = "New persistent map component anchored";
 		} catch (IOException ex) {
-			persistentAnchorFrames = 0;
+			persistentAnchorStatus = "Could not create persistent map component";
 			System.out.println("Could not place a new minimap atlas section: " +
 					ex);
+		}
+	}
+
+	/** Captures the current visible 3x3 from the exact PNG-backed TexI that is
+	 * rendered by the minimap. Missing textures are requested by getgrid() and
+	 * are picked up on a later frame; each coordinate is converted once. */
+	private Map<Coord, PersistentMapStore.DetailedPattern>
+			collectUnanchoredDetailedPatterns(Coord centerGrid) {
+		synchronized (ui.sess.glob.map.req) {
+			synchronized (ui.sess.glob.map.grids) {
+				for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+					Coord coordinate = centerGrid.add(x, y);
+					Grid candidate = ui.sess.glob.map.grids.get(coordinate);
+					if ((candidate == null) || (candidate.mnm == null))
+						continue;
+					Tex texture = getgrid(candidate.mnm);
+					if (!(texture instanceof TexI) || ((TexI)texture).back == null)
+						continue;
+					synchronized (unanchoredDetailedPatterns) {
+						if (!unanchoredDetailedPatterns.containsKey(coordinate)) {
+							PersistentMapStore.DetailedPattern pattern =
+									PersistentMapStore.DetailedPattern.from(((TexI)texture).back);
+							if (pattern == null)
+								continue;
+							unanchoredDetailedPatterns.put(new Coord(coordinate), pattern);
+							unanchoredDetailedPatternRevision++;
+							while (unanchoredDetailedPatterns.size() >
+									UNANCHORED_DETAILED_BUFFER_LIMIT) {
+								java.util.Iterator<Coord> iterator =
+										unanchoredDetailedPatterns.keySet().iterator();
+								iterator.next();
+								iterator.remove();
+							}
+						}
+					}
+				}
+			}
+		}
+		synchronized (unanchoredDetailedPatterns) {
+			Map<Coord, PersistentMapStore.DetailedPattern> current =
+					new TreeMap<Coord, PersistentMapStore.DetailedPattern>();
+			for (Map.Entry<Coord, PersistentMapStore.DetailedPattern> entry :
+					unanchoredDetailedPatterns.entrySet()) {
+				Coord coordinate = entry.getKey();
+				if ((Math.abs(coordinate.x - centerGrid.x) <= 1) &&
+						(Math.abs(coordinate.y - centerGrid.y) <= 1))
+					current.put(new Coord(coordinate), entry.getValue());
+			}
+			return current;
+		}
+	}
+
+	private void startDetailedAnchorMatch(final Coord centerGrid,
+			final Map<Coord, PersistentMapStore.DetailedPattern> observed) {
+		final int revision = unanchoredDetailedPatternRevision;
+		if (((revision == lastDetailedAnchorMatchRevision) &&
+				(lastDetailedAnchorMatchCenter != null) &&
+				lastDetailedAnchorMatchCenter.equals(centerGrid)) || detailedAnchorWorkerRunning)
+			return;
+		lastDetailedAnchorMatchRevision = revision;
+		lastDetailedAnchorMatchCenter = new Coord(centerGrid);
+		detailedAnchorWorkerRunning = true;
+		final long session = mappingSession;
+		HackThread worker = new HackThread(new Runnable() {
+			public void run() {
+				try {
+					PersistentMapStore.DetailedAnchorMatch match =
+							persistentMap.findDetailedAnchor(centerGrid, observed);
+					if ((mappingSession == session) && awaitingPersistentAnchor) {
+						detailedAnchorResult = match;
+						detailedAnchorResultRevision = revision;
+						detailedAnchorResultCenter = new Coord(centerGrid);
+						if (match == null)
+							System.out.println("[PersistentMap] detailed recovery found no candidate for center=" + centerGrid);
+					}
+				} catch (Exception ex) {
+					if ((mappingSession == session) && awaitingPersistentAnchor) {
+						detailedAnchorResult = null;
+						detailedAnchorResultRevision = revision;
+						detailedAnchorResultCenter = new Coord(centerGrid);
+						persistentAnchorStatus = "Could not compare saved detailed map tiles";
+					}
+					System.out.println("[PersistentMap] detailed recovery exception for center=" +
+							centerGrid + ": " + ex);
+				} finally {
+					detailedAnchorWorkerRunning = false;
+				}
+			}
+		}, "Persistent minimap matcher");
+		worker.setDaemon(true);
+		worker.start();
+		persistentAnchorStatus = "Comparing detailed 9/9 map neighbourhood with saved atlas";
+	}
+
+	private void applyDetailedAnchorMatchIfReady(Coord centerGrid) {
+		if ((detailedAnchorResultRevision != unanchoredDetailedPatternRevision) ||
+				(lastDetailedAnchorMatchCenter == null) ||
+			!lastDetailedAnchorMatchCenter.equals(detailedAnchorResultCenter) ||
+				!lastDetailedAnchorMatchCenter.equals(centerGrid))
+			return;
+		PersistentMapStore.DetailedAnchorMatch match = detailedAnchorResult;
+		if ((match != null) && (match.confidence >= 0.99) && (match.grids == 9)) {
+			/* A near-identical detailed neighbourhood is sufficiently strong to
+			 * merge without another click and authorize refreshed tiles in this
+			 * matched 3x3 area. */
+			mappingStartPoint = new Coord(match.origin);
+			awaitingPersistentAnchor = false;
+			persistentAnchorSuggestion = null;
+			dismissedSuggestionOrigin = null;
+			detailedReplacementCenter = new Coord(centerGrid);
+			changedMappingAnchor();
+			persistentAnchorStatus = "Persistent map anchored automatically from detailed match";
+			System.out.println("[PersistentMap] automatically accepted detailed anchor: origin=" +
+					match.origin + ", score=" +
+					String.format(java.util.Locale.US, "%.2f%%", match.confidence * 100.0) +
+					", compared=" + match.grids + " tiles");
+			return;
+		}
+		if ((match != null) && (match.confidence >= 0.90) &&
+				((dismissedSuggestionOrigin == null) ||
+				!dismissedSuggestionOrigin.equals(match.origin))) {
+			persistentAnchorSuggestion = new PersistentAnchorSuggestion(match);
+			persistentAnchorStatus = "Detailed map match found; confirm merge in World Map";
+		} else if ((match != null) && (dismissedSuggestionOrigin != null) &&
+				dismissedSuggestionOrigin.equals(match.origin)) {
+			persistentAnchorStatus = "Suggested map location dismissed; continuing to explore";
+		} else if (match != null) {
+			persistentAnchorStatus = "Best detailed map match below 90%; continuing to explore";
+		} else if (!detailedAnchorWorkerRunning) {
+			persistentAnchorStatus = "Detailed map neighbourhood did not match saved atlas";
+		}
+	}
+
+	private boolean detailedReplacementApplies(Coord sessionGrid) {
+		Coord center = detailedReplacementCenter;
+		return (center != null) && (sessionGrid != null) &&
+				(Math.abs(sessionGrid.x - center.x) <= 1) &&
+				(Math.abs(sessionGrid.y - center.y) <= 1);
+	}
+
+	/**
+	 * A changed tile hash may be a refreshed copy of an existing atlas tile.
+	 * Require two independently known neighboring hashes to agree with the
+	 * expected persistent coordinates before allowing replacement.
+	 */
+	private boolean confirmedPersistentReplacement(Coord sessionGrid,
+			Coord persistentGrid) {
+		if ((sessionGrid == null) || (persistentGrid == null) || (ui.sess == null))
+			return false;
+		int matches = 0;
+		synchronized (ui.sess.glob.map.req) {
+			synchronized (ui.sess.glob.map.grids) {
+				for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+					if ((x == 0) && (y == 0))
+						continue;
+					Grid neighbor = ui.sess.glob.map.grids.get(sessionGrid.add(x, y));
+					if ((neighbor == null) || (neighbor.mnm == null))
+						continue;
+					Coord known = gridsHashes.get(neighbor.mnm);
+					if ((known != null) && known.equals(persistentGrid.add(x, y)))
+						matches++;
+				}
+			}
+		}
+		return matches >= 2;
+	}
+
+	/** Adds loaded surface-water masks from the current 3x3 to an invisible,
+	 * session-only buffer. A mask is enough for matching and avoids retaining
+	 * map images or displaying an unverified atlas position. Land-only masks are
+	 * retained as well, so the temporary explored area remains a real 3x3 sample
+	 * until water becomes available. */
+	private Map<Coord, PersistentMapStore.WaterPattern>
+			collectUnanchoredWaterPatterns(Coord centerGrid) {
+		synchronized (ui.sess.glob.map.req) {
+			synchronized (ui.sess.glob.map.grids) {
+				for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+					Coord coordinate = centerGrid.add(x, y);
+					Grid candidate = ui.sess.glob.map.grids.get(coordinate);
+					if ((candidate == null) || (candidate.mnm == null))
+						continue;
+					/* Grid.img is MCache's generated tile-colour raster. Persistent
+					 * minimap tiles, however, are the downloaded PNGs rendered by this
+					 * widget (and are what the user sees in the map). Comparing those
+					 * two representations makes an identical coastline look different.
+					 * Request/use the exact PNG-backed TexI instead; it may be absent for
+					 * one or two frames while the loader fetches it. */
+					Tex loaded = getgrid(candidate.mnm);
+					if (!(loaded instanceof TexI) || ((TexI) loaded).back == null)
+						continue;
+					java.awt.image.BufferedImage image = ((TexI) loaded).back;
+					synchronized (unanchoredWaterPatterns) {
+						PersistentMapStore.WaterPattern pattern =
+								unanchoredWaterPatterns.get(coordinate);
+						if (pattern == null) {
+							pattern = PersistentMapStore.WaterPattern.from(image);
+							if (pattern == null)
+								continue;
+							unanchoredWaterPatterns.put(new Coord(coordinate), pattern);
+							unanchoredWaterPatternRevision++;
+						}
+						while (unanchoredWaterPatterns.size() >
+								UNANCHORED_WATER_BUFFER_LIMIT) {
+							java.util.Iterator<Coord> iterator =
+									unanchoredWaterPatterns.keySet().iterator();
+							iterator.next();
+							iterator.remove();
+						}
+					}
+				}
+			}
+		}
+		synchronized (unanchoredWaterPatterns) {
+			return new TreeMap<Coord, PersistentMapStore.WaterPattern>(
+					unanchoredWaterPatterns);
+		}
+	}
+
+	/** True only when an explicitly confirmed disconnected component is safe. */
+	public static boolean canCreatePersistentComponent(MCache map,
+			Coord sessionTile) {
+		if (!Config.autoSaveMinimaps || !awaitingPersistentAnchor ||
+				primaryInterior || (map == null) || (sessionTile == null) ||
+				gridsHashes.isEmpty())
+			return false;
+		Coord centerGrid = sessionTile.div(cmaps);
+		synchronized (map.req) {
+			synchronized (map.grids) {
+				Grid center = map.grids.get(centerGrid);
+				return (center != null) && (center.mnm != null) &&
+						!gridsHashes.containsKey(center.mnm);
+			}
+		}
+	}
+
+	/** Creates a disconnected surface component after an explicit user action. */
+	public static boolean createPersistentComponent(MCache map,
+			Coord sessionTile) {
+		if (!canCreatePersistentComponent(map, sessionTile))
+			return false;
+		Coord centerGrid = sessionTile.div(cmaps);
+		Grid center;
+		synchronized (map.req) {
+			synchronized (map.grids) {
+				center = map.grids.get(centerGrid);
+			}
+		}
+		if ((center == null) || (center.mnm == null))
+			return false;
+		Coord previousStart = mappingStartPoint;
+		boolean previousAwaiting = awaitingPersistentAnchor;
+		try {
+			Coord origin = persistentMap.nextComponentOrigin();
+			persistentMap.recordComponent(center.mnm, origin, "surface");
+			mappingStartPoint = centerGrid.sub(origin);
+			awaitingPersistentAnchor = false;
+			changedMappingAnchor();
+			persistentAnchorStatus = "New disconnected map area anchored";
+			return true;
+		} catch (IOException ex) {
+			mappingStartPoint = previousStart;
+			awaitingPersistentAnchor = previousAwaiting;
+			persistentAnchorStatus = "Could not create persistent map component";
+			System.out.println("Could not place a disconnected minimap section: " + ex);
+			return false;
 		}
 	}
 
@@ -488,7 +964,8 @@ public class MiniMap extends Widget {
 		Coord hsz = sz.div(scale);
 
 		Coord tc = viewCenter();
-		resolvePersistentAnchor(tc.div(cmaps));
+		if (primary)
+			resolvePersistentAnchor(tc.div(cmaps));
 		Coord ulg = tc.div(cmaps);
 		while ((ulg.x * cmaps.x) - tc.x + (hsz.x / 2) > 0)
 			ulg.x--;
@@ -509,13 +986,17 @@ public class MiniMap extends Widget {
 		g.scale(scale);
 
 		synchronized (caveTex) {
+			/* MCache.trimall() clears this cache when the server replaces the
+			 * current map. While already underground that is the reliable session
+			 * signal for an interior-to-interior transition. */
+			if (primary && primaryInterior && caveTex.isEmpty()) {
+				interiorEntranceTile = null;
+				interiorEntrancePending = true;
+			}
 
 			for (int y = ulg.y; (y * cmaps.y) - tc.y + (hsz.y / 2) < hsz.y; y++) {
 				for (int x = ulg.x; (x * cmaps.x) - tc.x + (hsz.x / 2) < hsz.x; x++) {
 					Coord cg = new Coord(x, y);
-					if (mappingStartPoint == null) {
-						mappingStartPoint = new Coord(cg);
-					}
 					Grid grid;
 					synchronized (ui.sess.glob.map.req) {
 						synchronized (ui.sess.glob.map.grids) {
@@ -523,6 +1004,29 @@ public class MiniMap extends Widget {
 							if ((grid == null) && primary)
 								ui.sess.glob.map.request(cg);
 						}
+					}
+					if (mappingStartPoint == null) {
+						/* Preserve a local visual map while refusing to assign it an
+						 * unverified persistent position. Cave detection must still run
+						 * here, because a direct interior login has no atlas anchor. */
+						Tex unresolved = null;
+						if ((grid != null) && (grid.mnm != null))
+							unresolved = getgrid(grid.mnm);
+						/* The detailed PNG may still be loading. Keep the local generated
+						 * raster as a temporary fallback, but never use it for matching. */
+						if ((unresolved == null) && (grid != null))
+							unresolved = grid.getTex();
+						/* A loaded surface identity proves that any retained cave cache
+						 * is stale (for example after leaving a direct-cave session). */
+						if (primary && (grid != null) && (grid.mnm != null))
+							caveTex.clear();
+						if (primary && (grid != null) && (grid.mnm == null) &&
+								(unresolved != null))
+							caveTex.put(cg, unresolved);
+						if ((unresolved != null) && !hidden)
+							g.image(unresolved, cg.mul(cmaps).add(tc.inv())
+									.add(hsz.div(2)));
+						continue;
 					}
 					Coord relativeCoordinates = cg.sub(mappingStartPoint);
 					String mnm = null;
@@ -537,7 +1041,8 @@ public class MiniMap extends Widget {
 					Tex tex = null;
 
 					if (mnm != null) {
-						caveTex.clear();
+						if (primary)
+							caveTex.clear();
 						if (awaitingPersistentAnchor &&
 								!gridsHashes.containsKey(mnm)) {
 							tex = grid.getTex();
@@ -549,18 +1054,73 @@ public class MiniMap extends Widget {
 								mappingStartPoint = cg;
 								relativeCoordinates = new Coord(0, 0);
 							}
-							String previousGrid = coordHashes.put(
-									relativeCoordinates, mnm);
-							if ((previousGrid != null) &&
-									!previousGrid.equals(mnm))
-								gridsHashes.remove(previousGrid);
-							gridsHashes.put(mnm, relativeCoordinates);
-							if (Config.autoSaveMinimaps) {
-								try {
-									persistentMap.record(mnm, relativeCoordinates);
-								} catch (IOException ex) {
-									System.out.println("Could not index minimap tile " +
-											mnm + ": " + ex);
+							String previousGrid = coordHashes.get(relativeCoordinates);
+							boolean coordinateConflict = (previousGrid != null) &&
+									!previousGrid.equals(mnm);
+							if (coordinateConflict) {
+				if (detailedReplacementApplies(cg) ||
+						confirmedPersistentReplacement(cg, relativeCoordinates)) {
+									Tex replacement = getgrid(mnm);
+									if ((replacement instanceof TexI) &&
+											((TexI) replacement).back != null) {
+										try {
+												qualitySurvey.prepareGridIdentityMigration(previousGrid, mnm);
+											if (persistentMap.replaceAtConfirmedLocation(mnm,
+													relativeCoordinates, ((TexI) replacement).back)) {
+												coordHashes.put(relativeCoordinates, mnm);
+																	gridsHashes.remove(previousGrid);
+																	gridsHashes.put(mnm, relativeCoordinates);
+																	try {
+														qualitySurvey.replaceGridIdentity(previousGrid, mnm);
+														qualitySurvey.completeGridIdentityMigration(previousGrid, mnm);
+														} catch (IOException ex) {
+															try {
+																/* Retry immediately while the atlas still proves that
+																 * this journal entry is committed. */
+																qualitySurvey.replayPendingMigrations(gridsHashes);
+															} catch (IOException retry) {
+																System.out.println("Quality survey migration retry failed: " + retry);
+															}
+															String surveyKey = "survey|" + previousGrid + "|" + mnm;
+																			if (reportedPersistenceConflicts.add(surveyKey))
+																				System.out.println("Could not migrate quality survey anchors from " +
+																					previousGrid + " to " + mnm + ": " + ex);
+																	}
+																	System.out.println("[PersistentMap] replaced confirmed tile at " +
+														relativeCoordinates + ": " + previousGrid + " -> " + mnm);
+											}
+										} catch (IOException ex) {
+											String failureKey = "replace|" + relativeCoordinates + "|" + mnm;
+											if (reportedPersistenceConflicts.add(failureKey))
+												System.out.println("Could not replace confirmed minimap tile " +
+														relativeCoordinates + " for " + mnm + ": " + ex);
+										}
+									}
+								}
+								if (!gridsHashes.containsKey(mnm)) {
+									String conflictKey = "collision|" + relativeCoordinates + "|" + mnm;
+									if (reportedPersistenceConflicts.add(conflictKey))
+										System.out.println("Persistent minimap coordinate collision at " +
+											relativeCoordinates + " for " + mnm);
+								}
+							} else {
+								boolean recorded = true;
+								if (Config.autoSaveMinimaps) {
+									try {
+										/* Persist first: record() rejects collisions without
+										 * changing its map, so the live atlas stays retryable. */
+										persistentMap.record(mnm, relativeCoordinates);
+									} catch (IOException ex) {
+										recorded = false;
+										String failureKey = "index|" + relativeCoordinates + "|" + mnm;
+										if (reportedPersistenceConflicts.add(failureKey))
+											System.out.println("Could not index minimap tile " +
+													mnm + ": " + ex);
+									}
+								}
+								if (recorded) {
+									coordHashes.put(relativeCoordinates, mnm);
+									gridsHashes.put(mnm, relativeCoordinates);
 								}
 							}
 						} else {
@@ -569,8 +1129,10 @@ public class MiniMap extends Widget {
 								mappingStartPoint = mappingStartPoint
 										.add(relativeCoordinates
 												.sub(coordinates));
+								changedMappingAnchor();
 							}
 							awaitingPersistentAnchor = false;
+							changedMappingAnchor();
 						}
 
 						if (tex == null)
@@ -582,7 +1144,8 @@ public class MiniMap extends Widget {
 						if (grid != null) {
 							tex = grid.getTex();
 							if (tex != null) {
-								caveTex.put(cg, tex);
+								if (primary)
+									caveTex.put(cg, tex);
 							}
 						}
 						tex = caveTex.get(cg);
@@ -597,6 +1160,41 @@ public class MiniMap extends Widget {
 						g.image(tex, cg.mul(cmaps).add(tc.inv())
 								.add(hsz.div(2)));
 				}
+			}
+		}
+		boolean enteredInterior = false;
+		if (primary) {
+			synchronized (caveTex) {
+				boolean nowInterior = !caveTex.isEmpty();
+				enteredInterior = !primaryInterior && nowInterior;
+				primaryInterior = nowInterior;
+			}
+			if (enteredInterior)
+				qualitySurvey.clearPending();
+			if ((enteredInterior || interiorEntrancePending ||
+					(interiorEntranceTile == null)) && primaryInterior &&
+					(mv != null) && (ui != null) && (ui.sess != null)) {
+				Gob player = ui.sess.glob.oc.getgob(mv.playergob);
+				if (player != null) {
+					interiorEntranceTile = player.position().div(tileSize);
+					interiorEntrancePending = false;
+				} else {
+					interiorEntrancePending = true;
+				}
+			} else if (!primaryInterior) {
+				interiorEntranceTile = null;
+				interiorEntrancePending = false;
+			}
+		}
+		/* Record exterior context continuously while it is actually confirmed by
+		 * the persistent atlas. When cave tiles are present this is skipped, so
+		 * entering an interior freezes the last trustworthy exterior position. */
+		if (primary && !primaryInterior && (mv != null) && (ui != null) && (ui.sess != null)) {
+			Gob player = ui.sess.glob.oc.getgob(mv.playergob);
+			if (player != null) {
+				MapAnchor anchor = anchorForSessionTile(ui.sess.glob.map,
+						player.position().div(tileSize));
+				rememberExteriorAnchor(anchor);
 			}
 		}
 		// grid
@@ -650,6 +1248,12 @@ public class MiniMap extends Widget {
 		}
 		if (!hidden)
 			BreadcrumbTrail.draw(g, tc, hsz);
+		if (!hidden)
+		/* The interpolated field is intentionally a World Map feature. Rendering
+		 * it in the always-open minimap made the normal game loop pay its cost
+		 * every frame, while the exact sample dots remain available there. */
+		qualitySurvey.draw(g, tc, hsz, !primary,
+				(int)Math.round(scale * 1000));
 		drawMapOverlay(g, tc, hsz);
 		g.gl.glPopMatrix();
 		super.draw(og);
@@ -659,9 +1263,7 @@ public class MiniMap extends Widget {
 	}
 
 	public boolean isCave() {
-		synchronized (caveTex) {
-			return !caveTex.isEmpty();
-		}
+		return primaryInterior;
 	}
 
 	public void saveCaveMaps() {
@@ -707,6 +1309,11 @@ public class MiniMap extends Widget {
 			}
 		}
 		return (true);
+	}
+
+	public Object tooltip(Coord c, boolean again) {
+		String survey = qualitySurvey.tooltip(localToTile(c));
+		return (survey == null) ? super.tooltip(c, again) : survey;
 	}
 
 	public boolean mouseup(Coord c, int button) {

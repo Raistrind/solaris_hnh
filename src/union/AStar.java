@@ -210,11 +210,12 @@ public class AStar {
 		addConditional(neighbors, nodeLoc, 0, -1);
 		addConditional(neighbors, nodeLoc, 0, 1);
 		addConditional(neighbors, nodeLoc, 1, 0);
-		// Diagonal moving
-//		addConditional(neighbors, nodeLoc, 1, 1);
-//		addConditional(neighbors, nodeLoc, -1, -1);
-//		addConditional(neighbors, nodeLoc, -1, 1);
-//		addConditional(neighbors, nodeLoc, 1, -1);
+		// Diagonal movement makes the search follow the actual direction of
+		// travel instead of producing only horizontal and vertical stair-steps.
+		addConditional(neighbors, nodeLoc, 1, 1);
+		addConditional(neighbors, nodeLoc, -1, -1);
+		addConditional(neighbors, nodeLoc, -1, 1);
+		addConditional(neighbors, nodeLoc, 1, -1);
 
 		return neighbors;
 	}
@@ -222,22 +223,24 @@ public class AStar {
 	private boolean isDiagonal(int x, int y) {
 		return x != 0 && y != 0;
 	}
+
+	private boolean isPassable(int x, int y) {
+		return (x >= 0) && (x < grid.length) && (y >= 0)
+				&& (y < grid[0].length)
+				&& (grid[x][y] != Constants.FULL_NON_PASSABLE)
+				&& (grid[x][y] != Constants.DIAGONAL_NON_PASSABLE);
+	}
 	
 	private void addConditional(Vector addTo, Location loc, int x, int y) {
 		int newX = loc.x + x, newY = loc.y + y;
-		if (newX < 0 || newX >= grid.length) {
+		if (!isPassable(newX, newY)) {
 			return;
 		}
-		if (newY < 0 || newY >= grid[0].length) {
+		/* Do not cut through the corner of an obstacle. */
+		if (isDiagonal(x, y)
+				&& (!isPassable(loc.x + x, loc.y)
+						|| !isPassable(loc.x, loc.y + y))) {
 			return;
-		}
-		if (grid[newX][newY] == Constants.FULL_NON_PASSABLE) {
-			return;
-		}
-		if (isDiagonal(newX, newY)) {
-			if (grid[newX][newY] == Constants.DIAGONAL_NON_PASSABLE) {
-				return;
-			}
 		}
 		
 		Node newNode = new Node();

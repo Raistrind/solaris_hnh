@@ -170,79 +170,325 @@ public class APXUtils {
 	// Find path
 	@SuppressWarnings("rawtypes")
 	public static ArrayList<Coord> _pf_find_path(Coord rc, int id_if_needed) {
-		_pf_compute(id_if_needed);
+		if ((UI.instance == null) || (UI.instance.mapview == null)
+				|| (UI.instance.mapview.myLastCoord == null) || (rc == null))
+			return new ArrayList<Coord>();
+		/* Always mark the target as an obstacle. Interaction paths then choose
+		 * a reachable neighbouring cell instead of trying to stand inside it. */
+		_pf_compute(0);
 		/*if (unmark_last_point)
 			_pf_unmark_area(rc, new Coord(1, 1).add(rc));*/
 		Coord pc = new Coord(_pf_map_rad + 1, _pf_map_rad + 1);
 		Coord ec = _pf_real2map(rc);
-		AStar a = new AStar(_pf_map, new Location(pc.x, pc.y), new Location(
-				ec.x, ec.y));
-
-		ArrayList<Coord> path = new ArrayList<Coord>();
-		Vector v = a.AStarSearch(null);
-		if (v == null)
+		if (!_pf_in_array(ec))
 			return new ArrayList<Coord>();
-		for (Object obj : v) {
-			path.add(new Coord(((AStar.Node) obj).location.x,
-					((AStar.Node) obj).location.y));
+		ArrayList<Coord> goals = _pf_goals_for(ec, id_if_needed != 0);
+		ArrayList<Coord> path = null;
+		for (Coord goal : goals) {
+			AStar a = new AStar(_pf_map, new Location(pc.x, pc.y),
+					new Location(goal.x, goal.y));
+			Vector v = a.AStarSearch(null);
+			if (v == null)
+				continue;
+			path = new ArrayList<Coord>();
+			for (Object obj : v) {
+				path.add(new Coord(((AStar.Node) obj).location.x,
+						((AStar.Node) obj).location.y));
+			}
+			break;
 		}
-		ArrayList<Coord> ret = new ArrayList<Coord>();
-		ret.add(path.get(0)); // Add 1st element
-		for (int i = 1; i < path.size() - 1; i++) {
-			Coord prev = path.get(i - 1);
-			Coord curr = path.get(i);
-			Coord next = path.get(i + 1);
-
-			// down
-			if (prev.x == curr.x && curr.x == prev.x && curr.y - prev.y == 1
-					&& next.y - curr.y == 1) {
-				continue;
-			}
-			// up
-			if (prev.x == curr.x && curr.x == prev.x && curr.y - prev.y == -1
-					&& next.y - curr.y == -1) {
-				continue;
-			}
-			// right
-			if (prev.y == curr.y && curr.y == prev.y && curr.x - prev.x == 1
-					&& next.x - curr.x == 1) {
-				continue;
-			}
-			// left
-			if (prev.y == curr.y && curr.y == prev.y && curr.x - prev.x == -1
-					&& next.x - curr.x == -1) {
-				continue;
-			}
-			// up - right
-			if (curr.x - prev.x == 1 && next.x - curr.x == 1
-					&& curr.y - prev.y == 1 && next.y - curr.y == 1) {
-				continue;
-			}
-			// down - right
-			if (curr.x - prev.x == 1 && next.x - curr.x == 1
-					&& curr.y - prev.y == -1 && next.y - curr.y == -1) {
-				continue;
-			}
-			// up - left
-			if (curr.x - prev.x == -1 && next.x - curr.x == -1
-					&& curr.y - prev.y == 1 && next.y - curr.y == 1) {
-				continue;
-			}
-			// down - left
-			if (curr.x - prev.x == -1 && next.x - curr.x == -1
-					&& curr.y - prev.y == -1 && next.y - curr.y == -1) {
-				continue;
-			}
-			ret.add(curr);
-		}
-		ret.add(path.get(path.size() - 1)); // Add last element
+		if (path == null)
+			return new ArrayList<Coord>();
+		ArrayList<Coord> ret = _pf_smooth_path(path);
 
 		for (int i = 0; i < ret.size(); i++) {
 			Coord cur = ret.get(i);
 			Coord real = MapView.tilify(_pf_map2real(cur));
 			ret.set(i, real);
 		}
+		/* A* works on tile centres, but the player is usually somewhere inside
+		 * the current tile. Keep that exact position as the route origin and
+		 * collapse any safe initial centre waypoint so the first command does not
+		 * visibly snap toward the middle of the nearest tile. */
+		Coord actualStart = UI.instance.mapview.myLastCoord;
+		if (actualStart != null) {
+			ret.set(0, new Coord(actualStart));
+			ret = _pf_smooth_real_path(ret);
+			/* A* is anchored to the current tile, so an otherwise valid route can
+			 * still contain that tile centre as its first waypoint.  The player is
+			 * already inside the tile; sending that point to the server causes the
+			 * visible initial snap reported by users.  Drop only that redundant
+			 * leading centre, leaving the rest of the collision-safe route intact. */
+			Coord currentTileCenter = MapView.tilify(actualStart);
+			while ((ret.size() > 1)
+					&& (ret.get(1).dist(currentTileCenter) <= 1))
+				ret.remove(1);
+		}
 		return ret;
+	}
+
+	private static ArrayList<Coord> _pf_smooth_real_path(ArrayList<Coord> path) {
+		ArrayList<Coord> ret = new ArrayList<Coord>();
+		if (path.isEmpty()) return ret;
+		int current = 0;
+		ret.add(path.get(current));
+		while (current < path.size() - 1) {
+			int next = path.size() - 1;
+			while ((next > current + 1)
+					&& !_pf_is_safe_segment(path.get(current), path.get(next)))
+				next--;
+			ret.add(path.get(next));
+			current = next;
+		}
+		return ret;
+	}
+
+	private static ArrayList<Coord> _pf_goals_for(Coord target,
+			boolean adjacentToTarget) {
+		ArrayList<Coord> goals = new ArrayList<Coord>();
+		if (!adjacentToTarget) {
+			if (_pf_passable(target.x, target.y))
+				goals.add(target);
+			return goals;
+		}
+		/* Prefer the closest passable perimeter cell. A bounded search keeps
+		 * interaction routing predictable around large construction footprints. */
+		for (int radius = 1; radius <= 6; radius++) {
+			for (int x = target.x - radius; x <= target.x + radius; x++) {
+				for (int y = target.y - radius; y <= target.y + radius; y++) {
+					if ((Math.abs(x - target.x) != radius)
+							&& (Math.abs(y - target.y) != radius))
+						continue;
+					if (_pf_passable(x, y))
+						goals.add(new Coord(x, y));
+				}
+			}
+			if (!goals.isEmpty())
+				return goals;
+		}
+		return goals;
+	}
+
+	/*
+	 * A* supplies a safe cell-by-cell route. Collapse it into the longest safe
+	 * straight segments so the client walks diagonally and at natural angles
+	 * rather than sending a visibly jagged grid route.
+	 */
+	private static ArrayList<Coord> _pf_smooth_path(ArrayList<Coord> path) {
+		ArrayList<Coord> ret = new ArrayList<Coord>();
+		if (path.isEmpty())
+			return ret;
+		int current = 0;
+		ret.add(path.get(current));
+		while (current < path.size() - 1) {
+			int next = path.size() - 1;
+			while ((next > current + 1)
+					&& !_pf_clear_segment(path.get(current), path.get(next)))
+				next--;
+			ret.add(path.get(next));
+			current = next;
+		}
+		return ret;
+	}
+
+	private static boolean _pf_clear_segment(Coord start, Coord end) {
+		int x = start.x;
+		int y = start.y;
+		int dx = Math.abs(end.x - start.x);
+		int dy = Math.abs(end.y - start.y);
+		int sx = (x < end.x) ? 1 : -1;
+		int sy = (y < end.y) ? 1 : -1;
+		int err = dx - dy;
+		while (true) {
+			if (!_pf_passable(x, y))
+				return false;
+			if ((x == end.x) && (y == end.y))
+				return true;
+			int oldx = x;
+			int oldy = y;
+			int twiceError = err * 2;
+			boolean movedX = false;
+			boolean movedY = false;
+			if (twiceError > -dy) {
+				err -= dy;
+				x += sx;
+				movedX = true;
+			}
+			if (twiceError < dx) {
+				err += dx;
+				y += sy;
+				movedY = true;
+			}
+			if (movedX && movedY
+					&& (!_pf_passable(oldx + sx, oldy)
+							|| !_pf_passable(oldx, oldy + sy)))
+				return false;
+		}
+	}
+
+	/* Validate an exact world-coordinate segment against the same padded
+	 * collision bounds used by path generation. */
+	public static boolean _pf_is_safe_segment(Coord start, Coord end) {
+		if ((UI.instance == null) || (UI.instance.mapview == null)
+				|| (start == null) || (end == null))
+			return false;
+		if (_pf_map == null)
+			return false;
+		Coord mapStart = _pf_real2map(start);
+		Coord mapEnd = _pf_real2map(end);
+		if (!_pf_in_array(mapStart) || !_pf_in_array(mapEnd)
+				|| !_pf_clear_segment(mapStart, mapEnd))
+			return false;
+		MapView mw = UI.instance.mapview;
+		synchronized (mw.glob.oc) {
+			for (Gob gob : mw.glob.oc) {
+				if (gob.id == JSBotUtils.playerID)
+					continue;
+				String name = _pf_collision_name(gob);
+				if (name == null)
+					continue;
+				Resource.Neg neg = _pf_collision_bounds(gob);
+				if (_pf_skip_unbounded_visual(name, neg))
+					continue;
+				Coord c1;
+				Coord c2;
+				if (_pf_has_collision_bounds(neg)) {
+					c1 = _pf_padded_bound_start(gob, neg);
+					c2 = _pf_padded_bound_end(gob, neg);
+				} else {
+					c1 = _pf_collision_position(gob);
+					c2 = c1.add(2, 2);
+				}
+				if (_pf_segment_hits_rect(start, end, c1, c2))
+					return false;
+			}
+		}
+		return true;
+	}
+
+	private static boolean _pf_passable(int x, int y) {
+		return (x >= 0) && (x < _pf_map.length) && (y >= 0)
+				&& (y < _pf_map[0].length)
+				&& (_pf_map[x][y] != AStar.Constants.FULL_NON_PASSABLE)
+				&& (_pf_map[x][y] != AStar.Constants.DIAGONAL_NON_PASSABLE);
+	}
+
+	private static Resource.Neg _pf_collision_bounds(Gob gob) {
+		Resource resource = _pf_collision_resource(gob);
+		return (resource == null) ? null : resource.layer(Resource.negc);
+	}
+
+	private static Resource _pf_collision_resource(Gob gob) {
+		/* Layered objects expose collision and identity on their base resource,
+		 * not necessarily their first visual/content layer. */
+		Drawable drawable = gob.getattr(Drawable.class);
+		if (drawable instanceof Layered) {
+			Resource base = ((Layered) drawable).base.get();
+			if (base != null)
+				return base;
+		}
+		return gob.getres();
+	}
+
+	private static String _pf_collision_name(Gob gob) {
+		Resource resource = _pf_collision_resource(gob);
+		return (resource == null) ? gob.resname() : resource.name;
+	}
+
+	private static boolean _pf_has_collision_bounds(Resource.Neg neg) {
+		/* Neg coordinates are transformed from screen to map space. Depending on
+		 * wall orientation, the resulting size can have a negative x component;
+		 * it is still a valid rectangular collision footprint. */
+		return (neg != null) && (neg.bs.x != 0) && (neg.bs.y != 0);
+	}
+
+	private static Coord _pf_collision_position(Gob gob) {
+		/* Open wall doors are represented by a server-supplied draw offset. The
+		 * visual door moves out of the passage, but Gob.position() remains anchored
+		 * to the wall. Use the rendered position for collision checks so an open
+		 * door is not left behind as a phantom obstacle. */
+		return gob.position().add(gob.drawoff());
+	}
+
+	private static boolean _pf_skip_unbounded_visual(String name,
+			Resource.Neg neg) {
+		String lower = (name == null) ? "" : name.toLowerCase(Locale.US);
+		/* Crops and wild plants are drawable world contents, not collision
+		 * geometry. Some stages expose a Neg layer, so checking only for missing
+		 * bounds incorrectly turned cultures into pathfinding obstacles. */
+		if (lower.contains("gfx/terobjs/plants")
+				|| lower.contains("gfx/terobjs/fieldcrops")
+				|| lower.contains("gfx/terobjs/herbs"))
+			return true;
+		return (lower.contains("gfx/tiles/")
+				|| lower.contains("gfx/terobjs/items/")
+				|| lower.contains("gfx/terobjs/trees/log"))
+				&& !_pf_has_collision_bounds(neg);
+	}
+
+	private static boolean _pf_segment_hits_rect(Coord start, Coord end,
+			Coord first, Coord second) {
+		int left = Math.min(first.x, second.x);
+		int right = Math.max(first.x, second.x);
+		int top = Math.min(first.y, second.y);
+		int bottom = Math.max(first.y, second.y);
+		if (_pf_inside_rect(start, left, top, right, bottom)
+				|| _pf_inside_rect(end, left, top, right, bottom))
+			return true;
+		return _pf_segments_intersect(start, end, new Coord(left, top),
+				new Coord(right, top))
+				|| _pf_segments_intersect(start, end, new Coord(right, top),
+						new Coord(right, bottom))
+				|| _pf_segments_intersect(start, end, new Coord(right, bottom),
+						new Coord(left, bottom))
+				|| _pf_segments_intersect(start, end, new Coord(left, bottom),
+						new Coord(left, top));
+	}
+
+	private static boolean _pf_inside_rect(Coord point, int left, int top,
+			int right, int bottom) {
+		return (point.x >= left) && (point.x <= right) && (point.y >= top)
+				&& (point.y <= bottom);
+	}
+
+	private static boolean _pf_segments_intersect(Coord a, Coord b, Coord c,
+			Coord d) {
+		long ab1 = _pf_cross(a, b, c);
+		long ab2 = _pf_cross(a, b, d);
+		long cd1 = _pf_cross(c, d, a);
+		long cd2 = _pf_cross(c, d, b);
+		return (((ab1 == 0) && _pf_on_segment(a, b, c))
+				|| ((ab2 == 0) && _pf_on_segment(a, b, d))
+				|| ((cd1 == 0) && _pf_on_segment(c, d, a))
+				|| ((cd2 == 0) && _pf_on_segment(c, d, b))
+				|| (((ab1 > 0) != (ab2 > 0)) && ((cd1 > 0) != (cd2 > 0))));
+	}
+
+	private static long _pf_cross(Coord a, Coord b, Coord p) {
+		return ((long) (b.x - a.x) * (p.y - a.y))
+				- ((long) (b.y - a.y) * (p.x - a.x));
+	}
+
+	private static boolean _pf_on_segment(Coord a, Coord b, Coord p) {
+		return (p.x >= Math.min(a.x, b.x)) && (p.x <= Math.max(a.x, b.x))
+				&& (p.y >= Math.min(a.y, b.y))
+				&& (p.y <= Math.max(a.y, b.y));
+	}
+
+	private static Coord _pf_padded_bound_start(Gob gob, Resource.Neg neg) {
+		int padding = Math.max(1, _pf_tilesize / 5);
+		Coord origin = _pf_collision_position(gob).add(neg.bc);
+		Coord opposite = origin.add(neg.bs);
+		return new Coord(Math.min(origin.x, opposite.x) - padding,
+				Math.min(origin.y, opposite.y) - padding);
+	}
+
+	private static Coord _pf_padded_bound_end(Gob gob, Resource.Neg neg) {
+		int padding = Math.max(1, _pf_tilesize / 5);
+		Coord origin = _pf_collision_position(gob).add(neg.bc);
+		Coord opposite = origin.add(neg.bs);
+		return new Coord(Math.max(origin.x, opposite.x) + padding,
+				Math.max(origin.y, opposite.y) + padding);
 	}
 
 	// Fill _pf_map array
@@ -264,46 +510,25 @@ public class APXUtils {
 			for (Gob gob : mw.glob.oc) {
 				if (gob.id == JSBotUtils.playerID)
 					continue;
-				if (gob.id == id_if_needed)
-					continue;
-				name = gob.resname();
+				name = _pf_collision_name(gob);
 				if (name == null)
 					continue;
-				Drawable d = gob.getattr(Drawable.class);
-				if (name.contains("gfx/tiles/")
-						|| name.contains("gfx/terobjs/items/")
-						|| name.contains("gfx/terobjs/plants/")
-						|| name.contains("gfx/terobjs/herbs/")
-						|| name.contains("gfx/terobjs/trees/log"))
+				Resource.Neg neg = _pf_collision_bounds(gob);
+				if (_pf_skip_unbounded_visual(name, neg))
 					continue;
-				if (name.contains("gfx/arch/sign")) {
-					_pf_mark_area(gob.position(),
-							gob.position().add(new Coord(2, 2)));
-					continue;
-				}
-				Resource.Neg neg;
-				if (d instanceof ResDrawable) {
-					ResDrawable rd = (ResDrawable) d;
-					if (rd.spr == null)
-						continue;
-					if (rd.spr.res == null)
-						continue;
-					neg = rd.spr.res.layer(Resource.negc);
-				} else if (d instanceof Layered) {
-					Layered lay = (Layered) d;
-					if (lay.base.get() == null)
-						continue;
-					neg = lay.base.get().layer(Resource.negc);
-				} else {
-					continue;
-				}
-				if ((neg.bs.x > 0) && (neg.bs.y > 0)) {
-					Coord c1 = gob.position().add(neg.bc);
-					Coord c2 = c1.add(neg.bs);
+				/*
+				 * Use the gob resource directly rather than waiting for its sprite.
+				 * Construction sites often have not initialized a sprite yet, but
+				 * their resource collision bounds are already available.
+				 */
+				if (_pf_has_collision_bounds(neg)) {
+					Coord c1 = _pf_padded_bound_start(gob, neg);
+					Coord c2 = _pf_padded_bound_end(gob, neg);
 					_pf_mark_area(c1, c2);
 				} else {
-					_pf_mark_area(gob.position(),
-							gob.position().add(new Coord(2, 2)));
+					/* A resource without bounds is still a solid world object. */
+					Coord pos = _pf_collision_position(gob);
+					_pf_mark_area(pos, pos.add(new Coord(2, 2)));
 				}
 			}
 		}
@@ -720,74 +945,13 @@ public class APXUtils {
 
 	/* Semi-PF-Checking */
 	public static boolean isPathFree(Coord rc) {
-		Coord my = UI.instance.mapview.myLastCoord;
-		MapView mw = UI.instance.mapview;
-
-		ArrayList<Pair<Coord, Coord>> diagonals = new ArrayList<Pair<Coord, Coord>>();
-		/* Objects */
-		String name;
-		synchronized (mw.glob.oc) {
-			for (Gob gob : mw.glob.oc) {
-				if (gob.id == JSBotUtils.playerID)
-					continue;
-				name = gob.resname();
-				if (name == null)
-					continue;
-				Drawable d = gob.getattr(Drawable.class);
-				if (name.contains("gfx/tiles/")
-						|| name.contains("gfx/terobjs/items/")
-						|| name.contains("gfx/terobjs/plants/")
-						|| name.contains("gfx/terobjs/herbs/")
-						|| name.contains("gfx/terobjs/trees/log"))
-					continue;
-				if (name.contains("gfx/arch/sign")) {
-					Coord c1 = gob.position().sub(_pf_tilesize / 2);
-					Coord c2 = c1.add(_pf_tilesize, _pf_tilesize);
-					diagonals.add(new Pair<Coord, Coord>(c1, c2));
-					diagonals.add(new Pair<Coord, Coord>(new Coord(c2.x, c1.y),
-							new Coord(c1.x, c2.y)));
-					continue;
-				}
-				Resource.Neg neg;
-				if (d instanceof ResDrawable) {
-					ResDrawable rd = (ResDrawable) d;
-					if (rd.spr == null)
-						continue;
-					if (rd.spr.res == null)
-						continue;
-					neg = rd.spr.res.layer(Resource.negc);
-				} else if (d instanceof Layered) {
-					Layered lay = (Layered) d;
-					if (lay.base.get() == null)
-						continue;
-					neg = lay.base.get().layer(Resource.negc);
-				} else {
-					continue;
-				}
-				if ((neg.bs.x > 0) && (neg.bs.y > 0)) {
-					Coord c1 = gob.position().add(neg.bc);
-					Coord c2 = c1.add(neg.bs);
-					diagonals.add(new Pair<Coord, Coord>(c1, c2));
-					diagonals.add(new Pair<Coord, Coord>(new Coord(c2.x, c1.y),
-							new Coord(c1.x, c2.y)));
-				} else {
-					Coord c1 = gob.position().sub(_pf_tilesize / 2);
-					Coord c2 = c1.add(_pf_tilesize, _pf_tilesize);
-					diagonals.add(new Pair<Coord, Coord>(c1, c2));
-					diagonals.add(new Pair<Coord, Coord>(new Coord(c2.x, c1.y),
-							new Coord(c1.x, c2.y)));
-				}
-			}
-		}
-		boolean ret = false;
-		for (int i = 0; i < diagonals.size(); i++) {
-			ret = ret 
-					| isLinesCross(my.add(-2, -2), rc.add(-2, -2), diagonals.get(i).fst, diagonals.get(i).snd)
-					| isLinesCross(my.add(-2, 2), rc.add(-2, 2), diagonals.get(i).fst, diagonals.get(i).snd)
-					| isLinesCross(my.add(2, -2), rc.add(2, -2), diagonals.get(i).fst, diagonals.get(i).snd)
-					| isLinesCross(my.add(2, 2), rc.add(2, 2), diagonals.get(i).fst, diagonals.get(i).snd);
-		}
-		return !ret;
+		if ((UI.instance == null) || (UI.instance.mapview == null)
+				|| (UI.instance.mapview.myLastCoord == null) || (rc == null))
+			return false;
+		/* This public query can be called independently of route generation, so
+		 * anchor its grid to the current player position before testing it. */
+		_pf_compute(0);
+		return _pf_is_safe_segment(UI.instance.mapview.myLastCoord, rc);
 	}
 	
 	public static ArrayList<String> params = new ArrayList<String>();

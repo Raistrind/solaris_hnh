@@ -69,6 +69,7 @@ public class Item extends Widget implements DTarget {
 	public int meter = 0;
 	public double count_of_value = -1;
 	public double count_of_maximum = -1;
+	private long qualitySurveyRetryUntil;
 
 	public static class ItemQualityComparator implements Comparator<Item> {
 		int desc = -1;
@@ -170,6 +171,9 @@ public class Item extends Widget implements DTarget {
 			}
 		}
 		updateQualityMultiplier();
+		/* Quality details can arrive after the item widget. The survey recorder
+		 * intentionally accepts only a short, matching recent world action. */
+		scheduleQualitySurveyObservation();
 		invalidateFEP();
 		invalidateCuriosity();
 	}
@@ -373,7 +377,7 @@ public class Item extends Widget implements DTarget {
 			else if (resource.name.equals("gfx/invobjs/feast-rob"))
 				itemName = "Ring of Brodgar (Seafood)";
 		}
-		return itemName.trim().toLowerCase(Locale.ENGLISH);
+		return Config.normalizeFEPName(itemName);
 	}
 
 	private static void appendFEPValue(StringBuilder buf, String key,
@@ -537,8 +541,14 @@ public class Item extends Widget implements DTarget {
 
 	long hoverstart;
 	Text shorttip = null, longtip = null;
+	private int knowledgeGeneration = -1;
 
 	public Object tooltip(Coord c, boolean again) {
+		int currentKnowledgeGeneration = KnowledgeBase.generation();
+		if (currentKnowledgeGeneration != knowledgeGeneration) {
+			knowledgeGeneration = currentKnowledgeGeneration;
+			resettt();
+		}
 		int nextKnowledgeMode = Config.showItemContext ? KnowledgeBase
 				.detailMode(ui) : 0;
 		if (nextKnowledgeMode != knowledgeMode) {
@@ -569,6 +579,8 @@ public class Item extends Widget implements DTarget {
 					String context = KnowledgeBase.itemTooltip(this, knowledgeMode);
 					if (context != null)
 						tt += context;
+					if (knowledgeMode <= 0)
+						tt += baseCookingFuelTooltip();
 					shorttip = RichText.render(tt, (knowledgeMode > 0) ? 320 : 200);
 				}
 			}
@@ -591,12 +603,25 @@ public class Item extends Widget implements DTarget {
 				String context = KnowledgeBase.itemTooltip(this, knowledgeMode);
 				if (context != null)
 					tt += context;
+				if (knowledgeMode <= 0)
+					tt += baseCookingFuelTooltip();
 				if(pg != null)
 					tt += "\n\n" + pg.text;
 				longtip = RichText.render(tt, (knowledgeMode > 0) ? 320 : 200);
 			}
 			return(longtip);
 		}
+	}
+
+	private String baseCookingFuelTooltip() {
+		Resource resource = this.res.get();
+		String resourceName = (resource == null) ? GetResName() : resource.name;
+		String name = (resource == null) ? name() : KnowledgeBase.displayName(resource);
+		String fuel = KnowledgeBase.cookingFuelForItem(name, resourceName);
+		if ((fuel == null) || (fuel.length() == 0))
+			return "";
+		return "\n$col[190,210,255]{Fuel needed:} "
+				+ RichText.Parser.quote(fuel);
 	}
 	
 	public static String min2hours(int minutes) {
@@ -674,6 +699,11 @@ public class Item extends Widget implements DTarget {
 			this.c = ui.mc.add(doff.inv());
 		}
 		ensureCuriosityStat();
+		/* A fishing result may arrive before its resource has finished loading.
+		 * Register this exact newly created widget now; update() performs the
+		 * bounded retry once its resource becomes available. */
+		MiniMap.noteQualitySurveyItemCreated(this);
+		scheduleQualitySurveyObservation();
 	}
 
 	public Item(Coord c, int res, int q, Widget parent, Coord drag, int num) {
@@ -719,7 +749,10 @@ public class Item extends Widget implements DTarget {
 					return (true);
 			}
 		}
-		if (w instanceof DTarget) {
+		if (w instanceof MapView) {
+			if (((MapView) w).iteminteract(c, c.add(doff.inv()), this))
+				return (true);
+		} else if (w instanceof DTarget) {
 			if (((DTarget) w).iteminteract(c, c.add(doff.inv())))
 				return (true);
 		}
@@ -741,6 +774,10 @@ public class Item extends Widget implements DTarget {
 		} else if (name == "chres") {
 			chres(ui.sess.getres((Integer) args[0]), (Integer) args[1]);
 			resettt();
+			/* Filling an existing container commonly changes its resource without a
+			 * following tooltip message. At this point both resource and encoded
+			 * quality have been applied; observe is harmless without a pending action. */
+			scheduleQualitySurveyObservation();
 		} else if (name == "color") {
 			olcol = (Color) args[0];
 		} else if (name == "tt") {
@@ -756,6 +793,8 @@ public class Item extends Widget implements DTarget {
 	}
 
 	public boolean mousedown(Coord c, int button) {
+		if ((button == 1) || ((button == 3) && (ui.modctrl || ui.modshift)))
+			MiniMap.cancelQualitySurveyForInventoryMove(this);
 		if (!isDragging) {
 			if ((button == 2) && Config.showItemContext) {
 				openRecipeBrowser();
@@ -778,11 +817,10 @@ public class Item extends Widget implements DTarget {
 				} else if (ui.modshift) {
 					wdgmsg("transfer_such_all", GetResName());
 				} else {
-					if (Config.showItemRecipeMenu) {
-						String[] identity = contextIdentity();
-						FlowerMenu.expectItemRecipeOption(ui, identity[0],
-								identity[1], new Coord(ui.mc));
-					}
+					String[] identity = contextIdentity();
+					FlowerMenu.expectItemRecipeOption(ui, this, identity[0],
+							identity[1], new Coord(ui.mc));
+					FlowerMenu.expectItemEquipOption(ui, this, new Coord(ui.mc));
 					wdgmsg("iact", c);
 				}
 				return (true);
@@ -816,6 +854,23 @@ public class Item extends Widget implements DTarget {
 	public void mousemove(Coord c) {
 		if (isDragging)
 			this.c = this.c.add(c.add(doff.inv()));
+	}
+
+	private void scheduleQualitySurveyObservation() {
+		qualitySurveyRetryUntil = MiniMap.observeQualitySurvey(this);
+	}
+
+	public void update(long dt) {
+		super.update(dt);
+		if (qualitySurveyRetryUntil == 0)
+			return;
+		if (System.currentTimeMillis() > qualitySurveyRetryUntil) {
+			qualitySurveyRetryUntil = 0;
+			return;
+		}
+		/* This is a bounded, per-item retry, not a recurring inventory scan. */
+		if ((res != null) && (res.get() != null))
+			scheduleQualitySurveyObservation();
 	}
 
 	public boolean drop(Coord cc, Coord ul) {

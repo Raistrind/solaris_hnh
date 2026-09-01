@@ -103,6 +103,12 @@ public class Config {
 	public static boolean mgridDebug = false;
 	public static boolean objectBlink;
 	public static boolean autoSaveMinimaps;
+	public static boolean showInteriorWorldOverlay = true;
+	public static int interiorWorldOverlayOpacity = 96;
+	public static boolean qualitySurvey = true, qualitySurveyForage = true,
+			qualitySurveySoil = true, qualitySurveyClay = true, qualitySurveyWater = true,
+			qualitySurveyFish = true,
+			qualitySurveyDots = true, qualitySurveyHeatmap = true;
 	public static boolean useSimpleMap;
 	public static boolean showMyAvatar = true;
 	public static boolean toggleCA;
@@ -133,6 +139,7 @@ public class Config {
 	public static boolean showObjectContext = true;
 	public static boolean showItemContext = true;
 	public static boolean showItemRecipeMenu = true;
+	public static boolean quickDepositToCart = true;
 	public static boolean showEquipmentComparison = true;
 	public static boolean showTerminologyLinks = true;
 	public static boolean showInventoryCategories = true;
@@ -333,7 +340,10 @@ public class Config {
 				if (fields.length != 2)
 					continue;
 				HashMap<String, Float> fep = new HashMap<String, Float>();
-				String name = fields[0].trim().toLowerCase(Locale.ENGLISH);
+				/* The server/resource tooltip is not consistent about word
+				 * separators (for example Honeybun vs Honey Bun). Store a compact
+				 * key so the table and runtime item names use the same identity. */
+				String name = normalizeFEPName(fields[0]);
 				for (String itm : fields[1].trim().split("\\s+")) {
 					String values[] = itm.split(":", 2);
 					if (values.length != 2)
@@ -361,6 +371,14 @@ public class Config {
 				}
 			}
 		}
+	}
+
+	/** Canonical key for food names used by the FEP table and item tooltips. */
+	static String normalizeFEPName(String value) {
+		if (value == null)
+			return "";
+		return value.trim().toLowerCase(Locale.ENGLISH)
+				.replaceAll("[^a-z0-9]+", "");
 	}
 
 	public static String mksmiley(String str) {
@@ -528,6 +546,18 @@ public class Config {
 		showDayTime = options.getProperty("showDayTime", "false").equals("true");
 		objectBlink = options.getProperty("objectBlink", "false").equals("true");
 		autoSaveMinimaps = options.getProperty("autoSaveMinimaps", "false").equals("true");
+		showInteriorWorldOverlay = options.getProperty("showInteriorWorldOverlay",
+				"true").equals("true");
+		interiorWorldOverlayOpacity = Math.max(48, Math.min(192,
+				Utils.atoi(options.getProperty("interiorWorldOverlayOpacity", "96"))));
+		qualitySurvey = options.getProperty("qualitySurvey", "true").equals("true");
+		qualitySurveyForage = options.getProperty("qualitySurveyForage", "true").equals("true");
+		qualitySurveySoil = options.getProperty("qualitySurveySoil", "true").equals("true");
+		qualitySurveyClay = options.getProperty("qualitySurveyClay", "true").equals("true");
+		qualitySurveyWater = options.getProperty("qualitySurveyWater", "true").equals("true");
+		qualitySurveyFish = options.getProperty("qualitySurveyFish", "true").equals("true");
+		qualitySurveyDots = options.getProperty("qualitySurveyDots", "true").equals("true");
+		qualitySurveyHeatmap = options.getProperty("qualitySurveyHeatmap", "true").equals("true");
 		sshot_compress = options.getProperty("sshot_compress", "false").equals("true");
 		sshot_noui = options.getProperty("sshot_noui", "false").equals("true");
 		sshot_nonames = options.getProperty("sshot_nonames", "false").equals("true");
@@ -544,6 +574,8 @@ public class Config {
 		showItemContext = options.getProperty("showItemContext", "true").equals(
 				"true");
 		showItemRecipeMenu = options.getProperty("showItemRecipeMenu", "true")
+				.equals("true");
+		quickDepositToCart = options.getProperty("quickDepositToCart", "true")
 				.equals("true");
 		showEquipmentComparison = options.getProperty("showEquipmentComparison",
 				"true").equals("true");
@@ -726,6 +758,18 @@ public class Config {
 		options.setProperty("objMouseHLight", objectHighlighting ? "true" : "false");
 		options.setProperty("onlineNotifier", onlineNotifier ? "true" : "false");
 		options.setProperty("autoSaveMinimaps", autoSaveMinimaps ? "true" : "false");
+		options.setProperty("showInteriorWorldOverlay",
+				showInteriorWorldOverlay ? "true" : "false");
+		options.setProperty("interiorWorldOverlayOpacity",
+				String.valueOf(interiorWorldOverlayOpacity));
+		options.setProperty("qualitySurvey", qualitySurvey ? "true" : "false");
+		options.setProperty("qualitySurveyForage", qualitySurveyForage ? "true" : "false");
+		options.setProperty("qualitySurveySoil", qualitySurveySoil ? "true" : "false");
+		options.setProperty("qualitySurveyClay", qualitySurveyClay ? "true" : "false");
+		options.setProperty("qualitySurveyWater", qualitySurveyWater ? "true" : "false");
+		options.setProperty("qualitySurveyFish", qualitySurveyFish ? "true" : "false");
+		options.setProperty("qualitySurveyDots", qualitySurveyDots ? "true" : "false");
+		options.setProperty("qualitySurveyHeatmap", qualitySurveyHeatmap ? "true" : "false");
 		options.setProperty("showDayTime", showDayTime ? "true" : "false");
 		options.setProperty("objectBlink", objectBlink ? "true" : "false");
 		options.setProperty("toggleCA", toggleCA ? "true" : "false");
@@ -746,6 +790,8 @@ public class Config {
 				: "false");
 		options.setProperty("showItemContext", showItemContext ? "true" : "false");
 		options.setProperty("showItemRecipeMenu", showItemRecipeMenu ? "true"
+				: "false");
+		options.setProperty("quickDepositToCart", quickDepositToCart ? "true"
 				: "false");
 		options.setProperty("showEquipmentComparison", showEquipmentComparison
 				? "true" : "false");

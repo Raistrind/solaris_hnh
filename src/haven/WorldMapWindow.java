@@ -26,6 +26,7 @@ public class WorldMapWindow extends Window {
 	private final WorldMapCanvas canvas;
 	private final MarkerList markerList;
 	private final Label markerTitle;
+	private final QualitySurveyPanel surveyControls;
 	private final TextEntry search;
 	private final Label status;
 	private final Label zoom;
@@ -34,6 +35,10 @@ public class WorldMapWindow extends Window {
 	private final Button editButton;
 	private final Button waypointButton;
 	private final Button deleteButton;
+	private final Button componentButton;
+	private final Label recoveryTitle;
+	private final Button acceptRecoveryButton;
+	private final Button dismissRecoveryButton;
 	private Coord contentSize;
 	private boolean resizing = false;
 	private Coord resizeOrigin = Coord.z;
@@ -98,7 +103,49 @@ public class WorldMapWindow extends Window {
 				BreadcrumbTrail.clear();
 			}
 		};
-		new Label(new Coord(335, 5), this, "Drag | Wheel | Right-click");
+		componentButton = new Button(new Coord(335, 2), 150, this,
+				"Add map area") {
+			public void click() {
+				final Coord tile = playerTile();
+				if ((ui.sess == null) || !MiniMap.canCreatePersistentComponent(
+						ui.sess.glob.map, tile)) {
+					showNotice("A confirmed surface grid is required first.");
+					return;
+				}
+				new ConfirmWnd(c.add(35, 35), ui.root,
+						"Add this disconnected surface area to the persistent atlas?",
+						new ConfirmWnd.Callback() {
+							public void result(Boolean confirmed) {
+								if (confirmed && MiniMap.createPersistentComponent(
+										ui.sess.glob.map, tile))
+									showNotice("Disconnected map area added.");
+								else if (confirmed)
+									showNotice("That surface grid is no longer available.");
+							}
+						});
+			}
+		};
+		componentButton.tooltip = "Use only after travelling to a genuinely disconnected surface area.";
+		new Label(new Coord(490, 5), this, "Drag | Wheel | Right-click");
+		recoveryTitle = new Label(Coord.z, this, "Map recovery");
+		acceptRecoveryButton = new Button(Coord.z, 112, this, "Merge here") {
+			public void click() {
+				if (MiniMap.acceptPersistentAnchorSuggestion()) {
+					showNotice("Suggested map location accepted.");
+					centerPlayer();
+				} else {
+					showNotice("That map suggestion is no longer available.");
+				}
+			}
+		};
+		acceptRecoveryButton.tooltip = "Merge this session with the proposed detailed-map location.";
+		dismissRecoveryButton = new Button(Coord.z, 72, this, "Dismiss") {
+			public void click() {
+				MiniMap.dismissPersistentAnchorSuggestion();
+				showNotice("Suggested map location dismissed.");
+			}
+		};
+		dismissRecoveryButton.tooltip = "Keep exploring and do not use this proposed location.";
 
 		markerTitle = new Label(Coord.z, this, "Markers");
 		search = new TextEntry(Coord.z, new Coord(SIDEBAR_WIDTH, 20), this,
@@ -152,12 +199,15 @@ public class WorldMapWindow extends Window {
 			}
 		};
 		status = new Label(Coord.z, this, "");
+		surveyControls = new QualitySurveyPanel(Coord.z, this);
 
 		layoutContent();
 		refreshMarkers();
 		centerPlayer();
 		updateGridButton();
 		updateZoomLabel();
+		updateComponentButton();
+		updateRecoveryControls();
 	}
 
 	private void layoutContent() {
@@ -170,11 +220,17 @@ public class WorldMapWindow extends Window {
 		canvas.c = new Coord(0, 30);
 		canvas.sz = new Coord(mapWidth, mapHeight);
 
-		markerTitle.c = new Coord(sidebarX, 3);
-		search.c = new Coord(sidebarX, 23);
+		/* The toolbar owns y=0..29. Start the sidebar beneath it so its controls
+		 * never overlap Add map area at the minimum 620px map width. */
+		surveyControls.c = new Coord(sidebarX, 30);
+		recoveryTitle.c = new Coord(sidebarX, 205);
+		acceptRecoveryButton.c = new Coord(sidebarX, 224);
+		dismissRecoveryButton.c = new Coord(sidebarX + 117, 224);
+		markerTitle.c = new Coord(sidebarX, 255);
+		search.c = new Coord(sidebarX, 275);
 		search.sz = new Coord(SIDEBAR_WIDTH, 20);
-		markerList.c = new Coord(sidebarX, 48);
-		markerList.sz = new Coord(SIDEBAR_WIDTH, contentSize.y - 148);
+		markerList.c = new Coord(sidebarX, 300);
+		markerList.sz = new Coord(SIDEBAR_WIDTH, Math.max(20, contentSize.y - 400));
 
 		int buttonY = contentSize.y - 95;
 		centerMarkerButton.c = new Coord(sidebarX, buttonY);
@@ -191,6 +247,32 @@ public class WorldMapWindow extends Window {
 	private void updateZoomLabel() {
 		zoom.settext(String.format(Locale.US, "Zoom: %.0f%%",
 				canvas.getScale() * 100));
+	}
+
+	private void updateComponentButton() {
+		boolean available = (ui.sess != null) && MiniMap.canCreatePersistentComponent(
+				ui.sess.glob.map, playerTile());
+		if (available)
+			componentButton.show();
+		else
+			componentButton.hide();
+	}
+
+	private void updateRecoveryControls() {
+		MiniMap.PersistentAnchorSuggestion suggestion =
+				MiniMap.persistentAnchorSuggestion();
+		if (suggestion == null) {
+			recoveryTitle.hide();
+			acceptRecoveryButton.hide();
+			dismissRecoveryButton.hide();
+			return;
+		}
+		recoveryTitle.settext(String.format(Locale.US,
+				"Detailed match: %.0f%% / %d tiles", suggestion.confidence * 100,
+				suggestion.matchedGrids));
+		recoveryTitle.show();
+		acceptRecoveryButton.show();
+		dismissRecoveryButton.show();
 	}
 
 	private Coord playerTile() {
@@ -296,6 +378,12 @@ public class WorldMapWindow extends Window {
 		String text;
 		if ((notice != null) && (System.currentTimeMillis() < noticeUntil)) {
 			text = notice;
+		} else if (canvas.isCave() && Config.showInteriorWorldOverlay &&
+				((MiniMap.exteriorContextTile() == null) ||
+				(MiniMap.interiorEntranceTile() == null))) {
+			text = "Interior map: no verified entrance context in this session.";
+		} else if (playerTile() != null && player == null) {
+			text = MiniMap.persistentAnchorStatus();
 		} else if ((waypoint != null) && waypoint.anchored() &&
 				(player != null) && (markerPersistentTile(waypoint) != null)) {
 			Coord waypointTile = markerPersistentTile(waypoint);
@@ -332,6 +420,8 @@ public class WorldMapWindow extends Window {
 		if ((lastSearch == null) || !lastSearch.equals(search.text))
 			refreshMarkers();
 		updateStatus();
+		updateComponentButton();
+		updateRecoveryControls();
 		super.update(dt);
 	}
 
@@ -458,6 +548,106 @@ public class WorldMapWindow extends Window {
 		}
 	}
 
+	/* Survey controls live with the map they affect. They update the same
+	 * persisted configuration as before, but avoid duplicating controls in the
+	 * general options window. */
+	private class QualitySurveyPanel extends Widget {
+		private static final int ROW_HEIGHT = 18;
+		private static final int FIRST_ROW = 20;
+		private final Text title = Text.std.render("Quality survey", Color.WHITE);
+		private final SurveyToggle[] toggles = new SurveyToggle[8];
+
+		QualitySurveyPanel(Coord c, Widget parent) {
+			super(c, new Coord(SIDEBAR_WIDTH, 168), parent);
+			addToggle(0, "Show samples", new SurveySetting() {
+				public boolean get() { return Config.qualitySurvey; }
+				public void set(boolean value) { Config.qualitySurvey = value; }
+			});
+			addToggle(1, "Forage", new SurveySetting() {
+				public boolean get() { return Config.qualitySurveyForage; }
+				public void set(boolean value) { Config.qualitySurveyForage = value; }
+			});
+			addToggle(2, "Soil", new SurveySetting() {
+				public boolean get() { return Config.qualitySurveySoil; }
+				public void set(boolean value) { Config.qualitySurveySoil = value; }
+			});
+			addToggle(3, "Clay", new SurveySetting() {
+				public boolean get() { return Config.qualitySurveyClay; }
+				public void set(boolean value) { Config.qualitySurveyClay = value; }
+			});
+			addToggle(4, "Water", new SurveySetting() {
+				public boolean get() { return Config.qualitySurveyWater; }
+				public void set(boolean value) { Config.qualitySurveyWater = value; }
+			});
+			addToggle(5, "Fish catches", new SurveySetting() {
+				public boolean get() { return Config.qualitySurveyFish; }
+				public void set(boolean value) { Config.qualitySurveyFish = value; }
+			});
+			addToggle(6, "Dots", new SurveySetting() {
+				public boolean get() { return Config.qualitySurveyDots; }
+				public void set(boolean value) { Config.qualitySurveyDots = value; }
+			});
+			addToggle(7, "Heatmap (3+)", new SurveySetting() {
+				public boolean get() { return Config.qualitySurveyHeatmap; }
+				public void set(boolean value) { Config.qualitySurveyHeatmap = value; }
+			});
+		}
+
+		private void addToggle(int index, String label, SurveySetting setting) {
+			toggles[index] = new SurveyToggle(label, setting);
+		}
+
+		public void draw(GOut g) {
+			g.chcolor(new Color(20, 20, 20, 180));
+			g.frect(Coord.z, sz);
+			g.chcolor(Color.GRAY);
+			g.rect(Coord.z, sz);
+			g.chcolor();
+			g.image(title.tex(), new Coord(5, 3));
+			for (int i = 0; i < toggles.length; i++) {
+				SurveyToggle toggle = toggles[i];
+				int y = FIRST_ROW + (i * ROW_HEIGHT);
+				int labelY = y + Math.max(0, (CheckBox.box.sz().y - toggle.label.sz().y) / 2);
+				g.image(CheckBox.box, new Coord(5, y));
+				if (toggle.value())
+					g.image(CheckBox.mark, new Coord(5, y));
+				g.image(toggle.label.tex(), new Coord(5 + CheckBox.box.sz().x + 4, labelY));
+			}
+		}
+
+		public boolean mousedown(Coord c, int button) {
+			if (button != 1)
+				return false;
+			for (int i = 0; i < toggles.length; i++) {
+				int y = FIRST_ROW + (i * ROW_HEIGHT);
+				if (c.isect(new Coord(2, y), new Coord(sz.x - 4, ROW_HEIGHT))) {
+					toggles[i].toggle();
+					return true;
+				}
+			}
+			return c.isect(Coord.z, sz);
+		}
+
+		private class SurveyToggle {
+			final Text label;
+			final SurveySetting setting;
+			SurveyToggle(String label, SurveySetting setting) {
+				this.label = Text.std.render(label, Color.WHITE);
+				this.setting = setting;
+			}
+			boolean value() { return setting.get(); }
+			void toggle() {
+				setting.set(!value());
+				Config.saveOptions();
+			}
+		}
+	}
+
+	private interface SurveySetting {
+		boolean get();
+		void set(boolean value);
+	}
+
 	private class WorldMapCanvas extends MiniMap {
 		private boolean dragging = false;
 		private boolean dragged = false;
@@ -469,13 +659,22 @@ public class WorldMapWindow extends Window {
 		}
 
 		protected void drawMapOverlay(GOut g, Coord tc, Coord hsz) {
+			drawExteriorContext(g, tc, hsz);
+			/* Cave session coordinates are not persistent atlas coordinates. Never
+			 * draw persistent markers/waypoints in that unrelated coordinate space. */
+			if (isCave()) {
+				g.chcolor();
+				return;
+			}
 			WorldMapMarkerStore.Marker waypoint = markerStore.waypoint();
 			Coord player = playerTile();
 			Coord waypointTile = markerSessionTile(waypoint);
 			if ((waypointTile != null) && (player != null)) {
 				g.chcolor(new Color(255, 255, 0, 180));
-				g.line(player.sub(tc).add(hsz.div(2)), waypointTile.sub(tc).add(
-						hsz.div(2)), 2);
+				Coord[] line = clipLine(player.sub(tc).add(hsz.div(2)),
+						waypointTile.sub(tc).add(hsz.div(2)), hsz);
+				if (line != null)
+					g.line(line[0], line[1], 2);
 			}
 
 			for (WorldMapMarkerStore.Marker marker : markerStore.markers()) {
@@ -486,33 +685,113 @@ public class WorldMapWindow extends Window {
 				if (!mc.isect(new Coord(-40, -20), hsz.add(80, 40)))
 					continue;
 				int radius = (marker == selected) ? 6 : 4;
-				g.chcolor(Color.BLACK);
-				g.fellipse(mc, new Coord(radius + 2, radius + 2));
-				g.chcolor(marker.color);
-				g.fellipse(mc, new Coord(radius, radius));
-				g.chcolor(Color.WHITE);
-				g.atext(marker.name, mc.add(radius + 4, 0), 0, 0.5);
+				if (insideCanvas(mc, radius + 2, hsz)) {
+					g.chcolor(Color.BLACK);
+					g.fellipse(mc, new Coord(radius + 2, radius + 2));
+					g.chcolor(marker.color);
+					g.fellipse(mc, new Coord(radius, radius));
+					g.chcolor(Color.WHITE);
+					g.atext(marker.name, mc.add(radius + 4, 0), 0, 0.5);
+				}
 			}
 
 			if (player != null) {
 				Coord pc = player.sub(tc).add(hsz.div(2));
-				g.chcolor(Color.BLACK);
-				g.fellipse(pc, new Coord(6, 6));
-				g.chcolor(Color.WHITE);
-				g.fellipse(pc, new Coord(4, 4));
+				if (insideCanvas(pc, 6, hsz)) {
+					g.chcolor(Color.BLACK);
+					g.fellipse(pc, new Coord(6, 6));
+					g.chcolor(Color.WHITE);
+					g.fellipse(pc, new Coord(4, 4));
+				}
 			}
 			g.chcolor();
 		}
 
+		private void drawExteriorContext(GOut g, Coord tc, Coord hsz) {
+			if (!Config.showInteriorWorldOverlay || !isCave())
+				return;
+			Coord entrance = MiniMap.exteriorContextTile();
+			Coord interiorEntrance = MiniMap.interiorEntranceTile();
+			if ((entrance == null) || (interiorEntrance == null))
+				return;
+			/* Keep the exterior entrance at the same screen coordinate as its
+			 * session-local cave entrance, so this layer pans with cave tc. */
+			Coord overlayCenter = entrance.add(tc.sub(interiorEntrance));
+			Coord center = hsz.div(2);
+			Coord centerGrid = overlayCenter.div(MCache.cmaps);
+			int radiusX = (hsz.x / MCache.cmaps.x) + 2;
+			int radiusY = (hsz.y / MCache.cmaps.y) + 2;
+			g.chcolor(255, 255, 255, Config.interiorWorldOverlayOpacity);
+			for (int y = centerGrid.y - radiusY; y <= centerGrid.y + radiusY; y++) {
+				for (int x = centerGrid.x - radiusX; x <= centerGrid.x + radiusX; x++) {
+					String gridName = coordHashes.get(new Coord(x, y));
+					if (gridName == null)
+						continue;
+					Tex tex = MiniMap.getgrid(gridName);
+					if (tex == null)
+						continue;
+					Coord ul = new Coord(x, y).mul(MCache.cmaps).sub(overlayCenter).add(center);
+					g.image(tex, ul);
+				}
+			}
+			Coord entranceScreen = entrance.sub(overlayCenter).add(center);
+			if (insideCanvas(entranceScreen, 7, hsz)) {
+				g.chcolor(Color.BLACK);
+				g.fellipse(entranceScreen, new Coord(7, 7));
+				g.chcolor(new Color(255, 224, 64));
+				g.fellipse(entranceScreen, new Coord(4, 4));
+				g.chcolor(Color.WHITE);
+				g.atext("Exterior entrance (session context)", entranceScreen.add(9, -9), 0, 1);
+			}
+			g.chcolor();
+		}
+
+		/* GOut clips textures but not GL immediate-mode primitives. Explicitly
+		 * bound every line and ellipse drawn by this canvas so map overlays can
+		 * never paint over its frame, sidebar, or the game view. */
+		private boolean insideCanvas(Coord point, int radius, Coord bounds) {
+			return (point.x >= radius) && (point.y >= radius)
+					&& (point.x < bounds.x - radius) && (point.y < bounds.y - radius);
+		}
+
+		private Coord[] clipLine(Coord from, Coord to, Coord bounds) {
+			double x0 = from.x, y0 = from.y, x1 = to.x, y1 = to.y;
+			double dx = x1 - x0, dy = y1 - y0;
+			double[] p = { -dx, dx, -dy, dy };
+			double[] q = { x0, (bounds.x - 1) - x0, y0, (bounds.y - 1) - y0 };
+			double enter = 0.0, exit = 1.0;
+			for (int i = 0; i < 4; i++) {
+				if (p[i] == 0.0) { if (q[i] < 0.0) return null; }
+				else {
+					double t = q[i] / p[i];
+					if (p[i] < 0.0) { if (t > exit) return null; if (t > enter) enter = t; }
+					else { if (t < enter) return null; if (t < exit) exit = t; }
+				}
+			}
+			return new Coord[] { new Coord((int)Math.round(x0 + (enter * dx)), (int)Math.round(y0 + (enter * dy))),
+					new Coord((int)Math.round(x0 + (exit * dx)), (int)Math.round(y0 + (exit * dy))) };
+		}
+
 		private WorldMapMarkerStore.Marker markerAt(Coord c) {
+			if (isCave())
+				return null;
 			WorldMapMarkerStore.Marker found = null;
 			double closest = Double.MAX_VALUE;
+			Coord bounds = sz.div(getScale());
 			for (WorldMapMarkerStore.Marker marker : markerStore.markers()) {
 				Coord markerTile = markerSessionTile(marker);
 				if (markerTile == null)
 					continue;
+				int radius = (marker == selected) ? 6 : 4;
+				/* Match the draw predicate exactly: labels/markers that were rejected
+				 * to keep their outer ring within the canvas must not remain clickable
+				 * from the neighbouring HUD or sidebar. */
+				Coord logical = markerTile.sub(viewCenter()).add(bounds.div(2));
+				if (!insideCanvas(logical, radius + 2, bounds))
+					continue;
 				double distance = tileToLocal(markerTile).dist(c);
-				if ((distance <= 10) && (distance < closest)) {
+				double hitRadius = (radius + 2) * getScale();
+				if ((distance <= hitRadius) && (distance < closest)) {
 					found = marker;
 					closest = distance;
 				}
@@ -548,9 +827,13 @@ public class WorldMapWindow extends Window {
 		}
 
 		public void mousemove(Coord c) {
-			MiniMap.MapAnchor anchor = anchorForTile(localToTile(c));
-			mouseTile = (anchor == null) ? null : MiniMap.persistentTileForAnchor(
-					anchor.gridName, anchor.offset);
+			if (isCave()) {
+				mouseTile = null;
+			} else {
+				MiniMap.MapAnchor anchor = anchorForTile(localToTile(c));
+				mouseTile = (anchor == null) ? null : MiniMap.persistentTileForAnchor(
+						anchor.gridName, anchor.offset);
+			}
 			if (dragging) {
 				Coord delta = dragOrigin.sub(c);
 				if (delta.dist(Coord.z) > 1)
@@ -580,7 +863,7 @@ public class WorldMapWindow extends Window {
 		public Object tooltip(Coord c, boolean again) {
 			WorldMapMarkerStore.Marker marker = markerAt(c);
 			if (marker == null)
-				return null;
+				return super.tooltip(c, again);
 			Coord player = playerPersistentTile();
 			Coord markerTile = markerPersistentTile(marker);
 			if ((player == null) || (markerTile == null))

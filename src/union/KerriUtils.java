@@ -111,11 +111,13 @@ public class KerriUtils {
 				int circleRadiusOuter = 5;
 				int circleRadiusInner = 5;
 
-				g.chcolor(Color.BLACK);
-				g.fellipse(ptc, new Coord(circleRadiusOuter, circleRadiusOuter));
-				g.chcolor(arg.snd);
-				g.fellipse(ptc, new Coord(circleRadiusInner, circleRadiusInner));
-				g.chcolor();
+				if (inside(ptc, circleRadiusOuter, hsz)) {
+					g.chcolor(Color.BLACK);
+					g.fellipse(ptc, new Coord(circleRadiusOuter, circleRadiusOuter));
+					g.chcolor(arg.snd);
+					g.fellipse(ptc, new Coord(circleRadiusInner, circleRadiusInner));
+					g.chcolor();
+				}
 			}
 		}
 	}
@@ -127,11 +129,13 @@ public class KerriUtils {
 			for (Pair<Coord, Color> arg : UI.instance.minimap.profits) {
 				Coord ptc = arg.fst.div(tileSize).add(tc.inv())
 						.add(hsz.div(2));
-				g.chcolor(Color.BLACK);
-				g.fellipse(ptc, new Coord(5, 5));
-				g.chcolor(arg.snd);
-				g.fellipse(ptc, new Coord(4, 4));
-				g.chcolor();
+				if (inside(ptc, 5, hsz)) {
+					g.chcolor(Color.BLACK);
+					g.fellipse(ptc, new Coord(5, 5));
+					g.chcolor(arg.snd);
+					g.fellipse(ptc, new Coord(4, 4));
+					g.chcolor();
+				}
 			}
 		}
 	}
@@ -143,14 +147,16 @@ public class KerriUtils {
 				for (Pair<Coord, String> arg : UI.instance.minimap.hherbs) {
 					Coord ptc = arg.fst.div(tileSize).add(tc.inv())
 							.add(hsz.div(2));
-					g.chcolor(Color.GRAY);
-					g.fellipse(ptc, new Coord(10, 10));
-					g.chcolor();
-					//drawing icon
-					String resn = arg.snd;
-					Resource res = Resource.load(resn);
-					res.loadwait();
-					g.image(res.layer(Resource.imgc).tex(), ptc.sub(new Coord(10, 10)), new Coord(20, 20));
+					if (inside(ptc, 10, hsz)) {
+						g.chcolor(Color.GRAY);
+						g.fellipse(ptc, new Coord(10, 10));
+						g.chcolor();
+						//drawing icon
+						String resn = arg.snd;
+						Resource res = Resource.load(resn);
+						res.loadwait();
+						g.image(res.layer(Resource.imgc).tex(), ptc.sub(new Coord(10, 10)), new Coord(20, 20));
+					}
 				}
 			}
 		}
@@ -170,9 +176,21 @@ public class KerriUtils {
 				current = JSBotUtils.getPlayerSelf().position();
 		}
 		Coord ptc = current.div(tileSize).add(tc.inv()).add(hsz.div(2));
-		g.chcolor(255, 255, 255, 64);
-		g.frect(ptc.sub(42, 42), new Coord(85, 85));
-		g.chcolor();
+		int x0 = Math.max(0, ptc.x - 42), y0 = Math.max(0, ptc.y - 42);
+		int x1 = Math.min(hsz.x, ptc.x + 43), y1 = Math.min(hsz.y, ptc.y + 43);
+		if ((x1 > x0) && (y1 > y0)) {
+			g.chcolor(255, 255, 255, 64);
+			g.frect(new Coord(x0, y0), new Coord(x1 - x0, y1 - y0));
+			g.chcolor();
+		}
+	}
+
+	/* GOut's immediate ellipses do not honour reclip on the legacy GL path.
+	 * Reject complete shapes at the edge so minimap overlays cannot paint over
+	 * the map border or into the surrounding HUD at any UI scale. */
+	private static boolean inside(Coord point, int radius, Coord bounds) {
+		return (point.x >= radius) && (point.y >= radius) &&
+				(point.x < bounds.x - radius) && (point.y < bounds.y - radius);
 	}
 	
 	//

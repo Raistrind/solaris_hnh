@@ -359,7 +359,7 @@ public final class KnowledgeBase {
 	}
 
 	private static boolean hasFEP(String name) {
-		return Config.FEPMap.containsKey(normalize(name));
+		return Config.FEPMap.containsKey(Config.normalizeFEPName(name));
 	}
 
 	private static boolean isCuriosity(String name) {
@@ -558,6 +558,9 @@ public final class KnowledgeBase {
 		if (mode == 1) {
 			if (info.obtainedFrom.length() > 0)
 				appendInfo(text, "Source", info.obtainedFrom);
+			String cookingFuel = cookingFuelForItem(name, resourceName);
+			if (cookingFuel.length() > 0)
+				appendInfo(text, "Fuel needed", cookingFuel);
 			text.append(Specialization.itemAdvice(name, resourceName,
 					info.category, false));
 			text.append("\n$col[170,170,170]{Hold Shift for uses, requirements, location and quality help.}");
@@ -577,6 +580,9 @@ public final class KnowledgeBase {
 			appendInfo(text, "Used for", used);
 			appendInfo(text, "Obtained from", info.obtainedFrom);
 			appendInfo(text, "Requires", info.requirements);
+			String cookingFuel = cookingFuelForItem(name, resourceName);
+			if (cookingFuel.length() > 0)
+				appendInfo(text, "Fuel needed", cookingFuel);
 			appendInfo(text, "Where", info.location);
 			String quality = info.quality;
 			if (item.get_quality() > 0)
@@ -658,6 +664,14 @@ public final class KnowledgeBase {
 			appendInfo(text, "Used for", info.usedFor);
 			appendInfo(text, "Obtained from", info.obtainedFrom);
 			appendInfo(text, "Requires", info.requirements);
+			String fuel = LegacyFuelGuide.fuelTypeForStation(name);
+			if (fuel.length() == 0)
+				fuel = LegacyFuelGuide.fuelTypeForStation(resource.name);
+			if (fuel.length() == 0)
+				fuel = LegacyFuelGuide.forRecipe(name);
+			if (fuel.length() == 0)
+				fuel = LegacyFuelGuide.forRecipe(resource.name);
+			appendInfo(text, "Fuel", fuel);
 			appendInfo(text, "Where", info.location);
 			appendInfo(text, "Quality", info.quality);
 			text.append(Specialization.itemAdvice(name, resource.name,
@@ -889,13 +903,17 @@ public final class KnowledgeBase {
 			String resource) {
 		String targetName = normalize(name);
 		String targetResource = normalize(resource);
+		String compactName = Config.normalizeFEPName(name);
+		String compactResource = Config.normalizeFEPName(resource);
 		List<Recipe> found = new ArrayList<Recipe>();
 		for (Recipe recipe : recipes.values()) {
 			for (Ingredient ingredient : recipe.inputs) {
 				boolean resourceMatch = (targetResource.length() > 0)
-						&& normalize(ingredient.resource).equals(targetResource);
+						&& (normalize(ingredient.resource).equals(targetResource)
+								|| Config.normalizeFEPName(ingredient.resource).equals(compactResource));
 				boolean nameMatch = (targetName.length() > 0)
-						&& normalize(ingredient.name).equals(targetName);
+						&& (normalize(ingredient.name).equals(targetName)
+								|| Config.normalizeFEPName(ingredient.name).equals(compactName));
 				if (resourceMatch || nameMatch) {
 					found.add(recipe);
 					break;
@@ -903,6 +921,22 @@ public final class KnowledgeBase {
 			}
 		}
 		return found;
+	}
+
+	/**
+	 * Returns a fuel requirement only when the item is a directly recognized
+	 * cooking input (for example Honeybun Dough). An ingredient such as flour,
+	 * berries or seeds may be used by many cooked recipes, but it does not itself
+	 * require oven fuel, so do not infer a misleading requirement from reverse
+	 * recipe matches.
+	 */
+	public static synchronized String cookingFuelForItem(String name,
+			String resource) {
+		int branches = LegacyFuelGuide.branchFuelForIngredient(name, resource);
+		if (branches < 0)
+			return "";
+		return Integer.toString(branches)
+				+ ((branches == 1) ? " branch" : " branches");
 	}
 
 	/** Opens the live crafting page for an indexed recipe when it is unlocked. */
@@ -1023,6 +1057,9 @@ public final class KnowledgeBase {
 			body.append(recipe.description).append("\n\n");
 		if (recipe.requirements.length() > 0)
 			body.append("$b{Requirements}\n").append(q(recipe.requirements)).append("\n\n");
+		String fuel = LegacyFuelGuide.forRecipe(recipe.name);
+		if (fuel.length() > 0)
+			body.append("$b{Fuel (Legacy reference)}\n").append(q(fuel)).append("\n\n");
 		body.append("$b{Ingredients}\n");
 		if (recipe.inputs.isEmpty()) {
 			body.append("Exact ingredients have not been indexed yet. Open this recipe once in the crafting window.\n");

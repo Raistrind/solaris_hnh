@@ -1,1178 +1,353 @@
 //#! name = Farmer
 //#! uniq = farmer_apxproductions
 //#! icon = gfx/invobjs/carrot
-// Globals
-var inventory = checkInventory();
-var harvester;
+
+/*
+ * Area Farmer for Legacy Haven & Hearth.
+ *
+ * This file intentionally contains only the current area workflow.  The old
+ * crop-specific farmer and its first crop menu were removed: keeping both
+ * workflows in one script made it possible for stale globals and duplicate
+ * helpers to intercept the new menu action.
+ */
 include("pathfinder");
-include("jBotAPIArcanist");
-// Settings
-var actionTimeout = 1000 * 60 * 2;   // Lag timeout
-var cannotPlantTimeout = 1000 * 10;   // Non-plowed tile timeout
-var cropRadius = 3;               // ������ � ������ ���� ����� (����, �����, ���, ����)
+include("jBotAPI");
+include("jBotErik");
 
-// Flags
-var stopFlag = false;
+var AREA_FARMER_TIMEOUT = 1000 * 60 * 2;
+var AREA_FARMER_UI_TIMEOUT = 1000 * 60 * 5;
+var AREA_FARMER_PLANT_TIMEOUT = 1000 * 10;
+var areaFarmerStop = false;
 
-/* =========================================================================== */
-/* ==============================   ��������   ============================== */
-/* =========================================================================== */
-function CarrotHarvester() {
-    this.cropName = "plants/carrot";      // ��� ����� ������� ����� ����������
-    this.cropSeedName = "invobjs/carrot";   // ��� ������� ������� ����� ������
-   this.cropStage = 4;                  // ������ ���������
-}
-CarrotHarvester.prototype.processHarvestedGoods = function() {
-    inventory = checkInventory();
-   
-   var seeds = inventory.getItems(this.cropSeedName);
-   var free = inventory.freeSlots();
-   var i = 0;
-   if (free < 3) {
-      inventory.sortItems(seeds, "quality", false);
-      for (i = 0; i < 3 - free; i++) {
-         // ���� ������� ���� �������
-         if (jGetHungry() < 50) {
-            if (seeds[i].isActual()) {
-               seeds[i].iact();
-               jWaitPopup(actionTimeout);
-			   jSleep(1000);
-               jSelectContextMenu("Eat");
-               waitUnActual(seeds[i]);
-            }
-         }
-         // ��������� �����
-         if (seeds[i].isActual()) {
-            seeds[i].drop();
-         }
-      }
-   }
-};
-
-
-/* =========================================================================== */
-/* ==============================   ������      ============================== */
-/* =========================================================================== */
-function BeetHarvester() {
-    this.cropName = "plants/beetroot";      // ��� ����� ������� ����� ����������
-    this.cropSeedName = "invobjs/beetroot";   // ��� ������� ������� ����� ������
-   this.cropStage = 3;                  // ������ ���������
-}
-BeetHarvester.prototype.processHarvestedGoods = function() {
-    inventory = checkInventory();
-   
-   var seeds = inventory.getItems(this.cropSeedName);
-   var free = inventory.freeSlots();
-   var i = 0;
-   //dropsleaves
-   var leaves = inventory.getItems("beetrootleaves");
-   if(leaves.length > 0)
-      if(leaves[0].isActual()){
-	  if (jIsDragging()) dropFromCursor();
-         leaves[0].dropSuchAll();}
-   while(leaves.length > 0)
-   {
-      leaves = inventory.getItems("beetrootleaves");
-      jSleep(500);
-   }
-   if (free < 6) {
-      inventory.sortItems(seeds, "quality", false);
-      for (i = 0; i < 4 - free; i++) {
-         if (jGetHungry() < 1) {
-            if (seeds[i].isActual()) {
-               seeds[i].iact();
-               jWaitPopup(actionTimeout);
-               jSelectContextMenu("Eat");
-               waitUnActual(seeds[i]);
-            }
-         }
-         if (seeds[i].isActual()) {
-            seeds[i].drop();
-         }
-      }
-   }
-};
-
-/* =========================================================================== */
-/* ==============================   ��������   ============================== */
-/* =========================================================================== */
-function WineHarvester() {
-    this.cropName = "plants/wine";		// ��� ����� ������� ����� ����������
-    this.cropSeedName = "invobjs/seed-grape";	// ��� ������� ������� ����� ������
-	this.packName = "invobjs/grapes";
-	this.cropStage = 3;						// ������ ���������
-	this.barrelID = 0; //id of barrel
-	this.pressID = 0; //id of winepress
-	this.containerID = 0;
-	this.startCoord = jCoord(0, 0);
-	this.fieldSize = jCoord(0, 0);
-	this.offsMove = jCoord(0, 2);
+function AreaCropProfile(label, cropName, seedNames, displayedCropStages, allowsDirectInventorySeed) {
+   this.label = label;
+   this.cropName = cropName;
+   this.cropSeedNames = (seedNames instanceof Array) ? seedNames : [seedNames];
+   /* The Legacy UI labels the zero-based plant blob as stage + 1. Keep the
+    * profile values in the player's displayed terminology, then convert them
+    * once for jGetObjectsInRect(), which filters on blob(0). */
+   if (!(displayedCropStages instanceof Array)) displayedCropStages = [displayedCropStages];
+   this.cropStages = [];
+   for (var i = 0; i < displayedCropStages.length; i++)
+      this.cropStages.push(displayedCropStages[i] - 1);
+   this.cropStage = this.cropStages[0];
+   /* Some Legacy crops can be replanted from the harvested item itself. */
+   this.allowsDirectInventorySeed = allowsDirectInventorySeed == true;
 }
 
-WineHarvester.prototype.selectObjects = function() {
-	var bar = jSelectObject("Select barrel...");
-	if(bar.name().indexOf("barrel") == -1)
-	{
-		jToConsole("ERROR: This is not a barrel!");
-		return false;
-	}
-	else this.barrelID = bar.getID();
-	var pr = jSelectObject("Select winepress...");
-	if(pr.name().indexOf("winepress") == -1)
-	{
-		jToConsole("ERROR: This is not a press!");
-		return false;
-	}
-	else this.pressID = pr.getID();
-	var cnt = jSelectObject("Select container (chest/lchest)...");
-	if(cnt.name().indexOf("cclosed") == -1 && cnt.name().indexOf("lchest") == -1)
-	{
-		jToConsole("ERROR: This is not a container!");
-		return false;
-	}
-	else this.containerID = cnt.getID();
-	return true;
+function areaFarmerProfiles() {
+   return [
+      /* Displayed stage 4 produces carrot seeds; displayed stage 5 is final. */
+      new AreaCropProfile("Carrot", "plants/carrot", ["invobjs/seed-carrot", "invobjs/carrot"], [4, 5], true),
+      new AreaCropProfile("Poppy", "plants/poppy", "invobjs/seed-poppy", 4),
+      new AreaCropProfile("Wheat", "plants/wheat", ["invobjs/seed-wheat", "invobjs/wheat", "wheat"], 3),
+      new AreaCropProfile("Hemp", "plants/hemp", "invobjs/seed-hemp", 4),
+      new AreaCropProfile("Beetroot", "plants/beetroot", ["invobjs/beetroot", "beetroot", "invobjs/seed-beetroot"], 3, true),
+      new AreaCropProfile("Grapes", "plants/wine", ["invobjs/seed-grape", "invobjs/grapes"], 3),
+      new AreaCropProfile("Tea", "plants/tea", "invobjs/seed-tea", 3),
+      new AreaCropProfile("Flax", "plants/flax", "invobjs/flaxseed", 3),
+      new AreaCropProfile("Peppercorn", "plants/pepper", ["invobjs/peppercorn", "invobjs/seed-pepper", "invobjs/pepper"], 3),
+      new AreaCropProfile("Hops", "plants/hops", ["invobjs/hopcones", "invobjs/hop-cones", "invobjs/seed-hops"], 3),
+      new AreaCropProfile("Peas", "plants/peas", ["invobjs/peapod", "invobjs/seed-peas"], 4, true),
+      new AreaCropProfile("Onions", "plants/onion", ["invobjs/onion", "invobjs/red-onion", "invobjs/yellow-onion"], 3, true),
+      new AreaCropProfile("Tobacco", "plants/tobacco", "invobjs/seed-tobacco", 3),
+      new AreaCropProfile("Pumpkin", "plants/pumpkin", "invobjs/seed-pumpkin", 6)
+   ];
 }
 
-WineHarvester.prototype.selectOffsetSide = function() {
-	var res = false;
-	var blist = ["West", "East", "North", "South", "Exit"];
-	var selectWindow = jGUIWindow(jCoord(450, 250), jCoord(105, blist.length * 25 + 15), "Offset");
-	var label = jGUILabel(selectWindow, jCoord(0, 5), "Select offset from objects.");
-	for(var i = 0; i < blist.length; i++)
-		jGUIButton(selectWindow, jCoord(5, 25 + i*25),  100, blist[i]);
-	selectWindow.toggleCloseButton();
-	var btext = selectWindow.waitButtonClick();
-	if(btext == blist[0]) {this.offsMove = jCoord(-2, 0); res = true;}
-	if(btext == blist[1]) {this.offsMove = jCoord(2, 0); res = true;}
-	if(btext == blist[2]) {this.offsMove = jCoord(0, -2); res = true;}
-	if(btext == blist[3]) {this.offsMove = jCoord(0, 2); res = true;}
-	if(btext == blist[4]) res = false;
-	selectWindow.destroy();
-	return res;
-}
-
-WineHarvester.prototype.selectRect = function() {
-	var offs = jCoord(0, 0);
-	var size = jCoord(1, 1);
-	var confirm = false;
-	jDrawGroundRect(offs, size);
-	var blist = ["West", "East", "North", "South", "Inc width", "Inc height", "Dec width", "Dec height", "Confirm", "Exit"];
-	var selectWindow = jGUIWindow(jCoord(250, 250), jCoord(105, blist.length * 25 + 15), "Area");
-	var label = jGUILabel(selectWindow, jCoord(5, 5), "Select grapes area.");
-	for(var i = 0; i < blist.length; i++)
-		jGUIButton(selectWindow, jCoord(5, 25 + i*25),  100, blist[i]);
-	selectWindow.toggleCloseButton();
-	var btext = "";
-	while(btext != "Exit"){
-		btext = selectWindow.waitButtonClick();
-		if(btext == blist[0]) offs.x--;
-		if(btext == blist[1]) offs.x++;
-		if(btext == blist[2]) offs.y--;
-		if(btext == blist[3]) offs.y++;
-		if(btext == blist[4]) size.x++;
-		if(btext == blist[5]) size.y++;
-		if(btext == blist[6]) if(size.x > 1) size.x--;
-		if(btext == blist[7]) if(size.y > 1) size.y--;
-		if(btext == blist[8]) {confirm = true; break;}
-		jDrawGroundRect(offs, size);
-	}
-	selectWindow.destroy();
-	jDrawGroundRect(offs, jCoord(0, 0));
-	this.startCoord = jMyCoords().add(offs.mul(11));
-	this.fieldSize = size;
-	return confirm;
-}
-
-WineHarvester.prototype.processHarvesting = function() {
-	var result = false;
-	var grapes = jGetObjectsInRect(this.startCoord, this.fieldSize.sub(1, 1), this.cropStage, [this.cropName]);
-	inventory = checkInventory();
-	var cuts = Math.floor((inventory.freeSlots() - 1)/3); //��������
-	if(cuts > 8) cuts = 8;
-	var currentgrape = 0;
-	while(1)
-	{
-		
-		if(currentgrape >= grapes.length) {
-			result = true;
-			this.plantGrapes();
-			jToConsole("FARMER: End of selected area.");
-			break;
-		}
-		goNearPosition(grapes[currentgrape].position(), 0);
-		
-		//cursor
-		if(!jIsCursor("harvest")) {
-			jSendAction("harvest");
-			jWaitCursor("harvest", actionTimeout);
-		}
-		//harvesting grapes
-		for(var i = 0; i < cuts; i++)
-		{
-			if(jGetStamina() < 50) drinkWater();
-			if(currentgrape >= grapes.length) break;
-			jDoClick(grapes[currentgrape].getID(), 1, 0);
-			jWaitProgress(actionTimeout);
-			currentgrape++;
-		}
-		//got pack of grapes
-		resetCursor();
-		//goes to press
-		goNearPosition(jGob(this.pressID).position(), 1);
-		//jAbsClick(jGob(this.pressID).position().add(this.offsMove.mul(11)), 1, 0);
-		//jWaitMove(actionTimeout);
-		jDoClick(this.pressID, 3, 0);
-		jWaitWindow("Winepress", actionTimeout);
-		//no window in lag/etc
-		jSleep(100);
-		if(!jHaveWindow("Winepress")) {result = false; break;}
-		//transfers all grapes to winepress
-		inventory.getItems(this.packName)[0].transferSuchAll();
-		//waits transfering
-		while(inventory.getItems(this.packName).length > 0)
-			jSleep(300);
-		//making juice
-		jGetWindow("Winepress").pushButton(1);
-		while(jGetWindow("Winepress").getInventories()[0].getItems(this.packName).length > 0)
-			jSleep(500);
-		//lifts press
-		var pc = jGob(this.pressID).position();// memorizing press coords
-		while(!jIsCursor("chi")){
-			jSendAction("carry");
-			jWaitCursor("chi", actionTimeout);
-			jSleep(300);
-		}
-		//lag
-		if(!jIsCursor("chi")) {result = false; break;}
-		jDoClick(this.pressID, 1, 0);
-		jSleep(1500);
-		//juice to barrel
-		goNearPosition(jGob(this.barrelID).position(), 1);
-		jDoClick(this.barrelID, 3, 0);
-		jWaitMove(actionTimeout);
-		jSleep(2000);
-		//placing press back
-		while(!jFindObjectByName ("borka", 1).isCarrying()){
-			goNearPosition(pc, 1);
-			jAbsClick(pc, 3, 0);
-			jWaitMove(actionTimeout);
-		}
-		//getting seeds from press
-		jDoClick(this.pressID, 3, 0);
-		jWaitWindow("Winepress", actionTimeout);
-		//no window in lag/etc
-		jSleep(100);
-		if(!jHaveWindow("Winepress")) {result = false; break;}
-		//transfer to pack seeds
-		jGetWindow("Winepress").getInventories()[0].getItems("")[0].transferSuchAll();
-		if (jGetWindow("Winepress"))
-			while(jGetWindow("Winepress").getInventories()[0].getItems("").length > 0)
-				jSleep(200);
-		//offset move
-		jMoveStep(this.offsMove);
-		jWaitMove(actionTimeout);
-		//going to lchect
-		var lc = jGob(this.containerID).position().add(this.offsMove.mul(11));
-		goNearPosition(jGob(this.containerID).position(), 1);
-		//jWaitMove(actionTimeout);
-		jDoClick(this.containerID, 3, 0);
-		jWaitWindow("Chest", actionTimeout);
-		//no window in lag/etc
-		jSleep(100);
-		if(!jHaveWindow("Chest")) {result = false; break;}
-		var bags = jGetWindow("Chest").getInventories()[0].getItems("invobjs/bag-seed");
-		var cbag = 0; //current bag
-		inventory = checkInventory();
-		//transferring seeds, btw i hate loftar
-		while(inventory.getItems(this.cropSeedName).length >= 1)
-		{
-			if(cbag >= bags.length) {result = true; break;}
-			var cnt = inventory.getItems(this.cropSeedName).length; //inventory count
-			bags[cbag].iact();
-			//opens seedbag
-			while(!jHaveWindow("Seedbag"))
-				jSleep(200);
-			//check for free slots
-			if(jGetWindow("Seedbag").getInventories()[0].freeSlots() == 0)
-			{
-				jGetWindow("Seedbag").close();
-				while(jHaveWindow("Seedbag"))
-					jSleep(200);
-				cbag++;
-				continue;
-			}
-			jSleep(100);
-			var free = jGetWindow("Seedbag").getInventories()[0].freeSlots(); //free slots in seedbag
-			inventory.getItems(this.cropSeedName)[0].transferSuchAll();
-			while(inventory.getItems(this.cropSeedName).length > Math.abs(cnt - free))
-				jSleep(200);
-			jGetWindow("Seedbag").close();
-			while(jHaveWindow("Seedbag"))
-				jSleep(200);
-			cbag++;
-		}
-		//����� �� ���, ��� ���� ����� ������ � ����� ��������
-		if(result == true) {
-			inventory.getItems(this.cropSeedName)[0].dropSuchAll();
-			jSleep(1000);
-			//planting grapes seeds
-			this.plantGrapes();
-			result = false;
-		}
-		//checks barrel
-		var bc = jGob(this.barrelID).position().add(this.offsMove.mul(11));
-		goNearPosition(jGob(this.barrelID).position(), 1);
-		//jWaitMove(actionTimeout);
-		jDoClick(this.barrelID, 3, 0);
-		while(!jHaveWindow("Barrel"))
-			jSleep(500);
-		//barrel label
-		var blbl = jGetWindow("Barrel").getLabelText(1);
-		if(blbl.indexOf("100.0") != -1) {
-			result = false; 
-			jToConsole("FARMER: Barrel is full of juice."); 
-			this.plantGrapes();
-			break;
-		} //breaks if barrel is full
-	}//1
-	return result;
-}
-
-WineHarvester.prototype.plantGrapes = function() {
-	equipShovel();
-	jMoveStep(this.offsMove);
-	jWaitMove(actionTimeout);
-	//going to lchect
-	var lc = jGob(this.containerID).position().add(this.offsMove.mul(11));
-	jAbsClick(lc, 1, 0);
-	jWaitMove(actionTimeout);
-	jDoClick(this.containerID, 3, 0);
-	jWaitWindow("Chest", actionTimeout);
-	//no window in lag/etc
-	jSleep(100);
-	if(!jHaveWindow("Chest")) return false;
-	openAllSeedbagsInv(jGetWindow("Chest").getInventories()[0]);
-	bagsSeedsSorter(this, jGetWindow("Chest").getInventories()[0]);
-	organizeBags(jGetWindow("Chest").getInventories()[0], this.cropSeedName);
-	jDoClick(this.containerID, 3, 0);
-	jSleep(1000);
-	jWaitWindow("Chest", actionTimeout);
-	//no window in lag/etc
-	jSleep(100);
-	if(!jHaveWindow("Chest")) return false;
-	jGetWindow("Chest").getInventories()[0].getItems("invobjs/bag-seed-f")[0].transferSuchAll();
-	jSleep(1000);
-	inventory = checkInventory();
-	var fullbags = inventory.getItems("invobjs/bag-seed-f");
-	for(var i = 0; i < fullbags.length; i++)
-		fullbags[i].iact();
-	while(jGetWindows("Seedbag").length < fullbags.length)
-		jSleep(200);
-	var swnds = jGetWindows("Seedbag");
-	var allseeds = [];
-	for(var i = 0; i < swnds.length; i++)
-	{
-		var sinvs = swnds[i].getInventories()[0].getItems(this.cropSeedName);
-		for(var j = 0; j < sinvs.length; j++)
-			allseeds.push(sinvs[j]);
-	}
-	var cseed = 0;
-	var overflow = false;
-	var st = jTilify(this.startCoord);
-	jAbsClick(st, 1, 0);
-	jWaitMove(actionTimeout);
-	for(var i = 0; i < this.fieldSize.x; i++) {
-		if(overflow == true) break;
-		for(var j = 0; j < this.fieldSize.y; j++) {
-			if(cseed >= allseeds.length) {overflow = true; break;}
-			if(jGetStamina() < 50) drinkWater();
-			var tile_coord = st.add(i*11, j*11);
-			if (jFindMapObjectNearAbs(tile_coord, 1, this.cropName) == null) {
-				jAbsClick(tile_coord, 1, 0);
-				jWaitMove(actionTimeout);
-				plantNewCrop(this, false);
-				cseed++;
-			}
-		}
-		jSleep(100);
-	}
-	//bagsSeedsSorter(this, inventory);
-	jAbsClick(lc, 1, 0);
-	jWaitMove(actionTimeout);
-	jDoClick(this.containerID, 3, 0);
-	jWaitWindow("Chest", actionTimeout);
-	//no window in lag/etc
-	jSleep(100);
-	if(!jHaveWindow("Chest")) return false;
-	var allbags = inventory.getItems("invobjs/bag-seed");
-	for(var i = 0; i < allbags.length; i++) {
-		allbags[i].transfer();
-		jSleep(100);
-	}
-	while(inventory.getItems("invobjs/bag-seed").length > 0)
-		jSleep(200);
-	jAbsClick(lc, 1, 0);
-	jWaitMove(actionTimeout);
-	equipScythe();
-}
-/* =========================================================================== */
-/* ==============================   �������      ============================== */
-/* =========================================================================== */
-function HempHarvester() {
-    this.cropName = "plants/hemp";      // ��� ����� ������� ����� ����������
-    this.cropSeedName = "invobjs/seed-hemp";   // ��� ������� ������� ����� ������
-   this.cropStage = 4;                  // ������ ���������
-   bagsSeedsSorter(this);
-}
-HempHarvester.prototype.processHarvestedGoods = function() {
-    bagsSeedsSorter(this);
-};
-
-/* =========================================================================== */
-/* ==============================   �������      ============================== */
-/* =========================================================================== */
-function PepperHarvester() {
-    this.cropName = "plants/pepper";      // ��� ����� ������� ����� ����������
-    this.cropSeedName = "invobjs/seed-pepper";   // ��� ������� ������� ����� ������
-   this.cropStage = 3;                  // ������ ���������
-   bagsSeedsSorter(this);
-}
-PepperHarvester.prototype.processHarvestedGoods = function() {
-    bagsSeedsSorter(this);
-};
-
-/* =========================================================================== */
-/* ==============================   ���         ============================== */
-/* =========================================================================== */
-function FlaxHarvester() {
-    this.cropName = "plants/flax";      // ��� ����� ������� ����� ����������
-    this.cropSeedName = "invobjs/flaxseed";   // ��� ������� ������� ����� ������
-   this.cropStage = 3;                  // ������ ���������
-}
-FlaxHarvester.prototype.processHarvestedGoods = function() {
-    bagsSeedsSorter(this);
-};
-
-/* =========================================================================== */
-/* ==============================   �����      ============================== */
-/* =========================================================================== */
-function PepperHarvester() {
-    this.cropName = "plants/pepper";      // ��� ����� ������� ����� ����������
-    this.cropSeedName = "invobjs/seed-pepper";   // ��� ������� ������� ����� ������
-   this.cropStage = 3;                  // ������ ���������
-}
-PepperHarvester.prototype.processHarvestedGoods = function() {
-    bagsSeedsSorter(this);
-};
-
-/* =========================================================================== */
-/* ==============================   ���       ============================== */
-/* =========================================================================== */
-//function TeaHarvester() {
-//    this.cropName = "plants/tea";      // ��� ����� ������� ����� ����������
-//    this.cropSeedName = "invobjs/seed-tea";   // ��� ������� ������� ����� ������
-//  this.cropStage = 3;                  // ������ ���������
- //  this.leaveName = "invobjs/tea-fresh";
- //  this.containerID = 0;
-//}
-//TeaHarvester.prototype.processHarvestedGoods = function() {
- //   bagsSeedsSorter(this);
-//};
-
-//TeaHarvester.prototype.selectObjects = function() {
- //  var cnt = jSelectObject("Select container (chest/lchest)...");
- //  if(cnt.name().indexOf("cclosed") == -1 && cnt.name().indexOf("lchest") == -1)
- //  {
- //     jToConsole("ERROR: This is not a container!");
- //     return false;
- //  }
- //  else this.containerID = cnt;
- //  return true;
-//}
-// 
-
-function TeaHarvester() {
-    this.cropName = "plants/tea";      // ��� ����� ������� ����� ����������
-    this.cropSeedName = "invobjs/seed-tea";   // ��� ������� ������� ����� ������
-   this.cropStage = 3;                  // ������ ���������
-}
-TeaHarvester.prototype.processHarvestedGoods = function() {
-   bagsSeedsSorter(this); 
-    inventory = checkInventory();
-   
-   //dropsleaves
-   var leaves = inventory.getItems("tea-fresh");
-   if(leaves.length > 0)
-      if(leaves[0].isActual())
-         leaves[0].dropSuchAll();
-   while(leaves.length > 0)
-   {
-      leaves = inventory.getItems("tealeaves");
-      jSleep(500);
-   }
-  
-};
-/* =========================================================================== */
-/* ==============================      ���      ============================== */
-/* =========================================================================== */
-function PoppyHarvester() {
-    this.cropName = "plants/poppy";      // ��� ����� ������� ����� ����������
-    this.cropSeedName = "invobjs/seed-poppy";   // ��� ������� ������� ����� ������
-   this.cropStage = 4;                  // ������ ���������
-}
-PoppyHarvester.prototype.processHarvestedGoods = function() {
-   bagsSeedsSorter(this);
-};
-
-/* =========================================================================== */
-/* ==============================   ��������   ============================== */
-/* =========================================================================== */
-function WheatHarvester() {
-    this.cropName = "plants/wheat";      // ��� ����� ������� ����� ����������
-    this.cropSeedName = "wheat";   // ��� ������� ������� ����� ������
-   this.cropStage = 3;                  // ������ ���������
-}
-WheatHarvester.prototype.processHarvestedGoods = function() {
-    bagsSeedsSorter(this);
-};
-
-/* =========================================================================== */
-/* ==============================   ��������   ============================== */
-/* =========================================================================== */
-function HopsHarvester() {
-    this.cropName = "plants/hops";      // ��� ����� ������� ����� ����������
-    this.cropSeedName = "invobjs/seed-hops";   // ��� ������� ������� ����� ������
-   this.cropStage = 3;                  // ������ ���������
-}
-HopsHarvester.prototype.processHarvestedGoods = function() {
-    inventory = checkInventory();
-   
-   var seeds = inventory.getItems(this.cropSeedName);
-   var free = inventory.freeSlots();
-   var i = 0;
-     if (free < 3) {
-      inventory.sortItems(seeds, "quality", false);
-      for (i = 0; i < 3 - free; i++) {
-         // ���� ������� ���� �������
-         if (jGetHungry() < 1) {
-            if (seeds[i].isActual()) {
-               seeds[i].iact();
-               jWaitPopup(actionTimeout);
-               jSelectContextMenu("Eat");
-               waitUnActual(seeds[i]);
-            }
-         }
-         // ��������� �����
-         if (seeds[i].isActual()) {
-            seeds[i].drop();
-         }
-      }
-   }
-};
-
-/* =========================================================================== */
-/* ==============================   ��������   ============================== */
-/* =========================================================================== */
-function PeasHarvester() {
-    this.cropName = "plants/peas";      // ��� ����� ������� ����� ����������
-    this.cropSeedName = "invobjs/peapod";   // ��� ������� ������� ����� ������
-   this.cropStage = 4;                  // ������ ���������
-}
-PeasHarvester.prototype.processHarvestedGoods = function() {
-    inventory = checkInventory();
-   
-   var seeds = inventory.getItems(this.cropSeedName);
-   var free = inventory.freeSlots();
-   var i = 0;
-     if (free < 3) {
-      inventory.sortItems(seeds, "quality", false);
-      for (i = 0; i < 3 - free; i++) {
-         // ���� ������� ���� �������
-         if (jGetHungry() < 1) {
-            if (seeds[i].isActual()) {
-               seeds[i].iact();
-               jWaitPopup(actionTimeout);
-               jSelectContextMenu("Eat");
-               waitUnActual(seeds[i]);
-            }
-         }
-         // ��������� �����
-         if (seeds[i].isActual()) {
-            seeds[i].drop();
-         }
-      }
-   }
-};
-
-/* =========================================================================== */
-/* ==============================   ��������   ============================== */
-/* =========================================================================== */
-function OnionsHarvester() {
-    this.cropName = "plants/onion";      // ��� ����� ������� ����� ����������
-    this.cropSeedName = "invobjs/onion";   // ��� ������� ������� ����� ������
-   this.cropStage = 3;                  // ������ ���������
-}
-OnionsHarvester.prototype.processHarvestedGoods = function() {
-    inventory = checkInventory();
-   
-   var seeds = inventory.getItems(this.cropSeedName);
-   var free = inventory.freeSlots();
-   var i = 0;
-     if (free < 3) {
-      inventory.sortItems(seeds, "quality", false);
-      for (i = 0; i < 3 - free; i++) {
-         // ���� ������� ���� �������
-         if (jGetHungry() < 1) {
-            if (seeds[i].isActual()) {
-               seeds[i].iact();
-               jWaitPopup(actionTimeout);
-               jSelectContextMenu("Eat");
-               waitUnActual(seeds[i]);
-            }
-         }
-         // ��������� �����
-         if (seeds[i].isActual()) {
-            seeds[i].drop();
-         }
-      }
-   }
-};
-
-/* =========================================================================== */
-/* ==============================   ��������   ============================== */
-/* =========================================================================== */
-function TobaccoHarvester() {
-    this.cropName = "plants/tobacco";      // ��� ����� ������� ����� ����������
-    this.cropSeedName = "invobjs/seed-tobacco";   // ��� ������� ������� ����� ������
-   this.cropStage = 3;                  // ������ ���������
-}
-TobaccoHarvester.prototype.processHarvestedGoods = function() {
-   bagsSeedsSorter(this); 
-    inventory = checkInventory();
-   
-   //dropsleaves
-   var leaves = inventory.getItems("tobacco-fresh");
-   if(leaves.length > 0)
-      if(leaves[0].isActual())
-         leaves[0].dropSuchAll();
-   while(leaves.length > 0)
-   {
-      leaves = inventory.getItems("tobacco-fresh");
-      jSleep(500);
-   }
-  
-};
-
-/* =========================================================================== */
-/* ==============================   ������      ============================== */
-/* =========================================================================== */
-function PumpkinHarvester() {
-    this.cropName = "plants/pumpkin";      // ��� ����� ������� ����� ����������
-    this.cropSeedName = "invobjs/seed-pumpkin";   // ��� ������� ������� ����� ������
-   this.cropStage = 6;                  // ������ ���������
-}
-PumpkinHarvester.prototype.processHarvestedGoods = function() {
-    inventory = checkInventory();
-   
-   var seeds = inventory.getItems(this.cropSeedName);
-   var free = inventory.freeSlots();
-   var i = 0;
-   //dropsleaves
-   var leaves = inventory.getItems("pumpkin");
-   while (leaves.length < 1) {jSleep(500); var leaves = inventory.getItems("pumpkin"); }
-   if(leaves.length > 0){
-		resetCursor();
-		jGetWindow("Inventory").getInventories()[0].getItems("pumpkin")[0].iact();
-		jWaitPopup();
-		jSelectContextMenu("Slice"); }
-	jSleep(500);
-	var flesh = inventory.getItems("pumpkinflesh");
-	var seed = inventory.getItems("seed-pumpkin");
-	while (flesh.length < 1) {jSleep(500); var flesh = inventory.getItems("pumpkinflesh"); var seed = inventory.getItems("seed-pumpkin");}
-      if(flesh[0].isActual()) {
-         flesh[0].dropSuchAll();}
-	  if(seed[0].isActual()) {
-         seed[0].dropSuchAll();}
-   while(leaves.length > 0)
-   {
-      leaves = inventory.getItems("pumpkin");
-      jSleep(500);
-   }
-
-};
-
-/* =========================================================================== */
-/* ==============================   �������      ============================== */
-/* =========================================================================== */
-function CarrotSeedHarvester() {
-    this.cropName = "plants/carrot";      // ��� ����� ������� ����� ����������
-    this.cropSeedName = "invobjs/seed-carrot";   // ��� ������� ������� ����� ������
-   this.cropStage = 3;                  // ������ ���������
-   bagsSeedsSorter(this);
-}
-CarrotSeedHarvester.prototype.processHarvestedGoods = function() {
-    bagsSeedsSorter(this);
-};
-
-/*==============================��������============================================*/
-
-function bagsSeedsSorter(harv) {
-   inventory = checkInventory();
-   var bags = inventory.getItems("invobjs/bag-seed");
-   var free = inventory.freeSlots();
-   var fslots = 0;
-   
-   if (bags.length > 0) {
-      var windows = jGetWindows("Seedbag");
-      if (windows.length > 0) {
-         var seeds = [];
-         var maxseedscount = bags.length * 9;
-         //getting seeds from all seedbags into array
-         for (var i = 0; i < windows.length; i++) {
-            var inv = waitInventory(windows[i], 0);
-            fslots += inv.freeSlots();
-            var bufseeds = inv.getItems(harv.cropSeedName);
-            for (var j = 0; j < bufseeds.length; j++) {
-               seeds.push(bufseeds[j]);
-            }
-         }
-         //from inventory to same array
-         var invseeds = inventory.getItems(harv.cropSeedName);
-         for (var j = 0; j < invseeds.length; j++) {
-            seeds.push(invseeds[j]);
-         }
-         //calculation quality of all seeds
-         var allq = 0;
-         for (var j = 0; j < seeds.length; j++) {
-            allq += seeds[j].quality();
-         }
-         //medium quality
-         var mediumrange = (allq / seeds.length) - 1;
-         //correcting medium q
-         //too many seeds
-         if(fslots < 9)
-            mediumrange += 1;
-         
-         if (seeds.length > maxseedscount * 0.75) {
-            for (var j = 0; j < seeds.length; j++) {
-               if (seeds[j].quality() <= mediumrange) seeds[j].drop();
-            }
-            organizeBags(inventory, harv.cropSeedName);
-         }
-      }//bags windows
-   }
-   if (inventory.freeSlots() < 4 && bags.length < 1) {
-      inventory.sortItems(inventory.getItems(harv.cropSeedName), "quality", false);
-      for (i = 0; i < 3 - free; i++) {
-         if (seeds[i].isActual()) {
-            seeds[i].drop();
-         }
-      }
+function areaFarmerChooseProfile() {
+   var profiles = areaFarmerProfiles();
+   var win = null;
+   try {
+      var height = 30 + ((profiles.length + 1) * 25);
+      win = jGUIWindow(jCoord(300, 250), jCoord(220, height), "Area Farmer");
+      jGUILabel(win, jCoord(5, 5), "Select the crop in the area:");
+      var i;
+      for (i = 0; i < profiles.length; i++)
+         jGUIButton(win, jCoord(5, 25 + i * 25), 210, profiles[i].label);
+      jGUIButton(win, jCoord(5, 25 + profiles.length * 25), 210, "Exit");
+      win.toggleCloseButton();
+      var selected = win.waitButtonClick(AREA_FARMER_UI_TIMEOUT);
+      if (selected == null || selected == "" || selected == "Exit") return null;
+      for (i = 0; i < profiles.length; i++)
+         if (selected == profiles[i].label) return profiles[i];
+      jToConsole("AREA FARMER: unknown crop button '" + selected + "'.");
+      return null;
+   } finally {
+      if (win != null) win.destroy();
    }
 }
 
-function organizeBags(inv, name) {
-   var bagw = jGetWindows("Seedbag");
-   if(bagw.length < 1) return;
-   var fullb, nextb;
-   fullb = 0;
-   nextb = bagw.length - 1;
-   while(1)
-   {
-      if(fullb == nextb) break; //breaks if filling bag == last bag
-      if(bagw[fullb].getInventories()[0].freeSlots() == 0) {
-         fullb++;
-         continue;
-      }
-      if(bagw[nextb].getInventories()[0].freeSlots() == 9) {
-         nextb--;
-         continue;
-      }
-      var freeSlot = bagw[fullb].getInventories()[0].freeSlotsCoords()[0]; //getting 1st empty slot at current filling bag
-      var seed = bagw[nextb].getInventories()[0].getItems(name)[0];    //getting 1st seed at current emptying bag
-      seed.take();
-      jWaitDrag();
-      bagw[fullb].getInventories()[0].drop(freeSlot); //drops to filling bag
-      jWaitDrop();
+function areaFarmerWindowInventory(wnd) {
+   var waited = 0;
+   while (wnd != null && waited < AREA_FARMER_TIMEOUT) {
+      var inventories = wnd.getInventories();
+      if (inventories != null && inventories.length > 0) return inventories[0];
+      jSleep(100);
+      waited += 100;
    }
+   return null;
 }
 
-function openAllSeedbags() {
-   inv = checkInventory();
+function areaFarmerOpenSeedbags(inv) {
    var bags = inv.getItems("invobjs/bag-seed");
-   if(bags.length < 1)
-      return;
-   for(var i = 0; i < bags.length; i++)
-      if(bags[i].isActual())
-         bags[i].iact();
-   while(jGetWindows("Seedbag").length != bags.length)
-      jSleep(300);
-}
-
-function openAllSeedbagsInv(inv) {
-   var bags = inv.getItems("invobjs/bag-seed");
-   if(bags.length < 1)
-      return;
-   for(var i = 0; i < bags.length; i++)
-      if(bags[i].isActual())
-         bags[i].iact();
-   while(jGetWindows("Seedbag").length != bags.length)
-      jSleep(300);
-}
-
-function waitUnActual(item) {
-   while (item.isActual()) {
-      jSleep(100);
-   }
-}
-
-function resetCursor() {
-   if (!jIsCursor("arw")) {
-      jAbsClick(jCoord(0, 0), 3, 0);
-      jWaitCursor("arw", actionTimeout);
-   }
-}
-
-function dropFromCursor(where) { //  1 = inventory
-if (jIsDragging()) {
-	if (where = null) where = 1
-	if (where = 1) {
-		if (checkInventory().freeSlots() > 0) checkInventory().drop(checkInventory().freeSlotsCoords()[0]);
-			jSleep(500);
-			if (!jIsDragging())	return;
-	}
-	while (jIsDragging()) {
-		jDropObject(0);
-		jSleep(300);      
-		}
-}
-} 
-
-function checkInventory() {
-   if(!jHaveWindow("Inventory")) {
-      jToggleInventory();
-      while(!jHaveWindow("Inventory"))
-         jSleep(100);
-   }
-   return jGetWindow("Inventory").getInventories()[0];
-}
-
-function checkEquipment() {
-   if(!jHaveWindow("Equipment")) {
-      jToggleEquipment();
-      while(!jHaveWindow("Equipment"))
-         jSleep(100);
-   }
-   return jGetJSEquip();
-}
-
-function waitInventoryObject(inv, objname) {
-   while (true) {
-      var objs = inv.getItems(objname);
-      if (objs.length > 0) break;
-      else jSleep(100);
-   }   
-}
-
-function waitUnActual(item) {
-   while (item.isActual()) {
-      jSleep(100);
-   }
-}
-
-function drinkWater() {
-   if (jGetStamina() > 50) return;
-   inventory = checkInventory();
-   var buckets = inventory.getItems("bucket-water");
-   if (buckets.length > 0) {
-      inventory.sortItems(buckets, "amount", false);
-      var bucket = buckets[0];
-      var bucket_coord = bucket.coord();
-      if (bucket.isActual()) {
-         bucket.take();
-         jWaitDrag();
-         var flasks = inventory.getItems("waterflask", "waterskin");
-         if (flasks.length > 0) {
-            var flask = flasks[0];
-            if (flask.isActual()) {
-               flask.itemact(0);
-               jSleep(500);
-               inventory.drop(bucket_coord);
-               jWaitDrop();
-            }
-         }
-      }
-   }
-   var flasks = inventory.getItems("waterflask", "waterskin");
-   if (flasks.length > 0) {
-      var flask = flasks[0];
-      if (flask.isActual()) {
-         flask.iact();
-         if (jWaitPopup(actionTimeout)) {
-            jSelectContextMenu("Drink");
-            jWaitProgress();
-         } else {
-            // No water
-            stopFlag = true;
-         }
-      }
-   }
-}
-
-function TileInfo(crd) {
-   this.coord = crd;
-}
-
-function findCrop(harv) {
-   var objid = 0;
-   for (var i = 0; i < cropRadius; i++) {
-      objid = (jFindObjectWithOffset(harv.cropName, 1, jCoord(0, i))); // down
-      if (objid && objid.blob(0) == harv.cropStage) return objid;
-   }
-   for (var i = 0; i < cropRadius; i++) {
-      objid = jFindObjectWithOffset(harv.cropName, 1, jCoord(0, -i)); // up
-      if (objid && objid.blob(0) == harv.cropStage) return objid;
-   }
-   for (var i = 0; i < cropRadius; i++) {
-      objid = jFindObjectWithOffset(harv.cropName, 1, jCoord(i, 0)); // right
-      if (objid && objid.blob(0) == harv.cropStage) return objid;
-   }
-   for (var i = 0; i < cropRadius; i++) {
-      objid = jFindObjectWithOffset(harv.cropName, 1, jCoord(-i, 0));// left
-      if (objid && objid.blob(0) == harv.cropStage) return objid;
-   }
-   objid = jFindObjectByName(harv.cropName, cropRadius);
-   if (objid.blob(0) != harv.cropStage) objid = -1;
-   return objid;
-}
-
-function dropItem(coord) {
-   var items = inventory.getItems("");
-   for (var i = 0; i < items.length; i++) {
-      if (items[i].coord().x == coord.x && items[i].coord().y == coord.y) { 
-         items[i].drop();
-         break;
-      }
-   }   
-}
-
-function waitDragName(name) {
-   while (true) {
-      var item = jGetDraggingItem();
-      if (item != null) {
-	  jSleep(500) 
-         if (item != null) {
-         if (item.resName().indexOf(name) >= 0) {
-            break;
-         } else {
-            jSleep(100);
-         }
-         } else jSleep(100);
-      } else {
-         break;
-      }
-   }
-}
-
-function equipScythe() {
-   var equip = checkEquipment();
-   var scythe = inventory.getItems("scythe")[0];
-   if (!scythe) return;
-   if (equip.resName(6).indexOf("shovel") >= 0) {
-      equip.takeAt(6);
-      jWaitDrag(actionTimeout);
-      inventory.drop(scythe.coord());
-      jSleep(1000);
-      waitDragName("scythe");
-	  jSleep(1000);
-      equip.dropTo(6);
-      jWaitDrop(actionTimeout);
-   }
-}
-
-function equipShovel() { // From scythe
-   var equip = checkEquipment();
-   var shovel = inventory.getItems("shovel")[0];
-   if (!shovel) return;
-   if (equip.resName(6).indexOf("scythe") >= 0) {
-      dropItem(shovel.coord().add(0, 2));
-      equip.takeAt(6);
-      jWaitDrag(actionTimeout);
-      inventory.drop(shovel.coord());
-      jSleep(1000);
-      waitDragName("shovel");
-      equip.dropTo(6);
-      jWaitDrop(actionTimeout);
-   }
-}
-
-function plowTile() {
-   drinkWater();
-   equipShovel();
-   jSendAction("plow");
-   jWaitCursor("dig", actionTimeout);
-   jOffsetClick(jCoord(0, 0), 1, 0);
-   jWaitProgress();
-   jOffsetClick(jCoord(0, 0), 3, 0);
-   jWaitCursor("arw", actionTimeout);
-}
-
-function sayArea(text) {
-   var chats = jGetChats();
-   for (var i = 0; i < chats.length; i++) {
-      if (chats[i].chatName().indexOf("Area Chat") >= 0) {
-         chats[i].sendMessage(text);
-         break;
-      }
-   }
-}
-
-function sortFunction2(a, b) {
-   if (!a.isActual() || !b.isActual()) return 0;
-   else return a.quality() - b.quality();
-}
-
-function sortFunction(a, b) {
-   if (!a.isActual() || !b.isActual()) return 0;
-   if (a.quality() < b.quality()) return 1;
-   if (a.quality() > b.quality()) return -1;
-   return 0;
-}
-
-function waitInventory(wnd, index) {
-   while (wnd.getInventories().length <= 0) {
-      jSleep(100);
-   }
-   return wnd.getInventories()[index];
-}
-
-function plantNewCrop(harv, notrecursive) {
-   jSleep(300);
-   inventory = checkInventory();
-   var plantedSeed = null;
+   if (bags.length == 0) return false;
+   var target = bags.length;
    var windows = jGetWindows("Seedbag");
-   var seedbags = inventory.getItems("invobjs/bag-seed-f");
-   if (seedbags.length > 0) {
-      var seeds = [];
-      for (var i = 0; i < windows.length; i++) {
-         var inv = waitInventory(windows[i], 0);
-         if (inv) {
-            var bufseeds = inv.getItems(harv.cropSeedName);
-            for (var j = 0; j < bufseeds.length; j++) {
-               seeds.push(bufseeds[j]);
-            }
-         }
-      }
-      var invseeds = inventory.getItems(harv.cropSeedName);
-      for (var j = 0; j < invseeds.length; j++) {
-         seeds.push(invseeds[j]);
-      }
-      var sorted_seeds = seeds.sort(sortFunction);
-      plantedSeed = sorted_seeds[0];
-   } else {
-      var invseeds = inventory.getItems(harv.cropSeedName);
-      if (invseeds.length > 0) {
-         inventory.sortItems(invseeds, "quality", true);
-         plantedSeed = invseeds[0];
-      }
+   var alreadyOpen = windows.length;
+   jToConsole("AREA FARMER: opening seed bags (" + alreadyOpen + "/" + target + ").");
+   var i;
+   for (i = alreadyOpen; i < bags.length; i++) {
+      if (bags[i].isActual()) bags[i].iact();
+      jSleep(150);
    }
-   
-   if (plantedSeed) {
-      // Plow tile if needed
-      if (jGetTileType(jCoord(0, 0)) != 9) {
-         plowTile();
-      }
-      if (plantedSeed.isActual()) {
-         plantedSeed.take();
-         jWaitDrag();
-         jInteractClick(jCoord(0, 0), 0);
-         if (!jWaitDrop(cannotPlantTimeout)) {
-            jWaitDrop();
-            if (notrecursive) return;
-            plowTile();
-            plantNewCrop(harv, true);
-         }
-      } else {
-         if (!notrecursive) plantNewCrop(harv, true);
-         else jPrint("Double fail on non-actual seed");
-      }
+   var waited = 0;
+   while (jGetWindows("Seedbag").length < target && waited < AREA_FARMER_TIMEOUT) {
+      jSleep(100);
+      waited += 100;
    }
+   var opened = jGetWindows("Seedbag").length;
+   if (opened < target)
+      jToConsole("AREA FARMER: only " + opened + "/" + target + " seed bags opened; continuing with those available.");
+   return opened > 0;
 }
 
-function waitPFEndMove() {
-   while (true) {
-      jWaitEndMove();
-      jSleep(500);
-      if (!jIsMoving()) {
-         return;
+function areaFarmerSeedBagCount(inv) {
+   return inv.getItems("invobjs/bag-seed").length;
+}
+
+function areaFarmerSeedBagFreeSlots() {
+   var free = 0;
+   var windows = jGetWindows("Seedbag");
+   for (var i = 0; i < windows.length; i++) {
+      var inv = areaFarmerWindowInventory(windows[i]);
+      if (inv != null) free += inv.freeSlots();
+   }
+   return free;
+}
+
+function areaFarmerGetSeedItems(inv, names) {
+   /* Use exact resource matching. getItems() is substring-based, so a
+    * request for invobjs/beetroot would otherwise also return beetrootleaves. */
+   for (var i = 0; i < names.length; i++) {
+      var found = inv.getEqualItems(names[i]);
+      if (found.length > 0) return found;
+   }
+   return [];
+}
+
+function areaFarmerSeedItems(profile, playerInv) {
+   var seeds = [];
+   var windows = jGetWindows("Seedbag");
+   var i, j, inv, found;
+   for (i = 0; i < windows.length; i++) {
+      inv = areaFarmerWindowInventory(windows[i]);
+      if (inv == null) continue;
+      found = areaFarmerGetSeedItems(inv, profile.cropSeedNames);
+      for (j = 0; j < found.length; j++) if (found[j].isActual()) seeds.push(found[j]);
+   }
+   found = areaFarmerGetSeedItems(playerInv, profile.cropSeedNames);
+   for (i = 0; i < found.length; i++) if (found[i].isActual()) seeds.push(found[i]);
+   seeds.sort(function(a, b) { return b.quality() - a.quality(); });
+   return seeds;
+}
+
+function areaFarmerSortCrops(crops, origin) {
+   crops.sort(function(a, b) {
+      var ap = a.position(), bp = b.position();
+      var ay = Math.floor((ap.y - origin.y) / 11), by = Math.floor((bp.y - origin.y) / 11);
+      if (ay != by) return ay - by;
+      var ax = Math.floor((ap.x - origin.x) / 11), bx = Math.floor((bp.x - origin.x) / 11);
+      return ((ay & 1) == 0) ? ax - bx : bx - ax;
+   });
+}
+
+function areaFarmerWalkTo(pos) {
+   var target = jTilify(pos);
+   if (jMyCoords().dist(target) <= 1) return true;
+   resetCursor();
+   if (jIsPathFree(target)) jAbsClick(target, 1, 0);
+   else if (jPFMove(target) <= 0) return false;
+   if (!jWaitStartMove(1500)) return false;
+   waitPFEndMove();
+   return jMyCoords().dist(target) <= 33;
+}
+
+function areaFarmerHarvestOne(crop, ordinal, total) {
+   if (crop == null || !crop.isActual()) return false;
+   if (checkInventory().freeSlots() <= 0) {
+      jToConsole("AREA FARMER: inventory full; stopped harvest at " + ordinal + "/" + total + ".");
+      return false;
+   }
+   var pos = crop.position();
+   if (!areaFarmerWalkTo(pos)) return false;
+   resetCursor();
+   jSendAction("harvest");
+   if (!jWaitCursor("harvest", AREA_FARMER_TIMEOUT)) return false;
+   jDoClick(crop.getID(), 1, 0);
+   jWaitProgress(AREA_FARMER_TIMEOUT);
+   jToConsole("AREA FARMER: harvested " + ordinal + "/" + total + ".");
+   return true;
+}
+
+function areaFarmerPlantOne(profile, pos, ordinal, total) {
+   var playerInv = checkInventory();
+   var seeds = areaFarmerSeedItems(profile, playerInv);
+   if (seeds.length == 0) return false;
+   if (!areaFarmerWalkTo(pos)) return false;
+   resetCursor();
+   var seed = seeds[0];
+   if (!seed.isActual()) return false;
+   seed.take();
+   if (!jWaitDrag(AREA_FARMER_TIMEOUT)) return false;
+   jInteractClick(jCoord(0, 0), 0);
+   if (!jWaitDrop(AREA_FARMER_PLANT_TIMEOUT)) return false;
+   jToConsole("AREA FARMER: replanted " + ordinal + "/" + total + ".");
+   return true;
+}
+
+function areaFarmerHasPosition(pos, positions) {
+   for (var i = 0; i < positions.length; i++)
+      if (positions[i].x == pos.x && positions[i].y == pos.y) return true;
+   return false;
+}
+
+function areaFarmerBuildPlantPositions(rect, harvestedPositions) {
+   var freshlyHarvested = [], emptyPlowed = [], area = rect[4];
+   for (var y = 0; y < area.y; y++) {
+      for (var x = 0; x < area.x; x++) {
+         var pos = jCoord(rect[0].x + x * 11, rect[0].y + y * 11);
+         /* Legacy has one ordinary plowed-soil tile type (9). */
+         if (jAbsTileType(pos.div(11)) != 9) continue;
+         var existing = jFindMapObjectNearAbs(pos, 1, "plants/");
+         if (existing != null) {
+            /* Only a tile harvested during this cycle is allowed to retain a
+             * still-disappearing plant gob as a planting target. */
+            if (areaFarmerHasPosition(pos, harvestedPositions)) freshlyHarvested.push(pos);
+            continue;
+         }
+         if (areaFarmerHasPosition(pos, harvestedPositions)) freshlyHarvested.push(pos);
+         else emptyPlowed.push(pos);
       }
    }
+   /* Freshly harvested tiles must be consumed first. Historical harvested
+    * positions are deliberately not passed here, otherwise the next cycle
+    * starts by selecting the crops that were just planted. */
+   return freshlyHarvested.concat(emptyPlowed);
+}
+
+function areaFarmerFindCrops(profile, rect, harvestedPositions) {
+   var area = rect[4];
+   var crops = [];
+   var seen = {};
+   for (var stageIndex = 0; stageIndex < profile.cropStages.length; stageIndex++) {
+      var foundJava = jGetObjectsInRect(rect[0], area.sub(1, 1), profile.cropStages[stageIndex], [profile.cropName]);
+      for (var i = 0; i < foundJava.length; i++) {
+         var gobKey = "" + foundJava[i].getID();
+         if (seen[gobKey]) continue;
+         seen[gobKey] = true;
+         var pos = jTilify(foundJava[i].position());
+         if (!areaFarmerHasPosition(pos, harvestedPositions)) crops.push(foundJava[i]);
+      }
+   }
+   areaFarmerSortCrops(crops, rect[0]);
+   return crops;
+}
+
+function areaFarmerHarvestCapacity(profile, playerInv) {
+   /* When the crop is being replanted from an item in the player inventory,
+    * seed bags are irrelevant: harvest capacity is ordinary inventory space,
+    * even if unrelated seed bags happen to be open or full. */
+   if (profile.allowsDirectInventorySeed)
+      return playerInv.freeSlots();
+   /* A missing seed bag must not abort the farmer. Harvest into the player
+    * inventory and use any matching seed/produce item found there. */
+   if (jGetWindows("Seedbag").length == 0)
+      return playerInv.freeSlots();
+   return areaFarmerSeedBagFreeSlots();
+}
+
+function areaFarmerHarvestAndPlantCycle(profile, rect, harvestedPositions, cycleNumber) {
+   var playerInv = checkInventory();
+   var crops = areaFarmerFindCrops(profile, rect, harvestedPositions);
+   var harvestedThisCycle = 0;
+   var harvestedThisCyclePositions = [];
+   if (crops.length == 0) {
+      jToConsole("AREA FARMER: cycle " + cycleNumber + " found no mature crops; checking the whole area for planting.");
+   } else {
+      var capacity = areaFarmerHarvestCapacity(profile, playerInv);
+      if (capacity <= 0) {
+         jToConsole("AREA FARMER: cycle " + cycleNumber + " has no harvest capacity (bags full and inventory unavailable).");
+         return 0;
+      }
+      if (crops.length > capacity) crops = crops.slice(0, capacity);
+      jToConsole("AREA FARMER: cycle " + cycleNumber + " harvesting " + crops.length + " crop(s).");
+      for (var i = 0; i < crops.length && !areaFarmerStop; i++) {
+         if (areaFarmerHarvestCapacity(profile, checkInventory()) <= 0) break;
+         var cropPos = crops[i].position();
+         if (!areaFarmerHarvestOne(crops[i], i + 1, crops.length)) break;
+         var harvestedTile = jTilify(cropPos);
+         harvestedPositions.push(harvestedTile);
+         harvestedThisCyclePositions.push(harvestedTile);
+         harvestedThisCycle++;
+      }
+      /* Do not plant a different set of tiles after a failed harvest pass. */
+      if (harvestedThisCycle == 0) return 0;
+   }
+
+   /* Harvested gobs disappear asynchronously; include the full selected
+    * plowed area, not just the tiles that happened to contain crops. */
+   jSleep(500);
+   var targets = areaFarmerBuildPlantPositions(rect, harvestedThisCyclePositions);
+   jToConsole("AREA FARMER: cycle " + cycleNumber + " has " + targets.length + " plowed planting target(s).");
+   var plantedThisCycle = 0;
+   for (var j = 0; j < targets.length && !areaFarmerStop; j++) {
+      if (areaFarmerSeedItems(profile, checkInventory()).length == 0) break;
+      if (areaFarmerPlantOne(profile, targets[j], j + 1, targets.length)) plantedThisCycle++;
+   }
+   jToConsole("AREA FARMER: cycle " + cycleNumber + " replanted " + plantedThisCycle + "/" + targets.length + ".");
+   return harvestedThisCycle;
+}
+
+function runAreaFarmer() {
+   var profile = areaFarmerChooseProfile();
+   if (profile == null) return;
+   jToConsole("AREA FARMER: selected " + profile.label + ".");
+
+   var inv = checkInventory();
+   var bagCount = areaFarmerSeedBagCount(inv);
+   if (bagCount == 0)
+      jToConsole("AREA FARMER: no seed bags found; using player inventory as the seed source/capacity.");
+   if (bagCount > 0 && !areaFarmerOpenSeedbags(inv)) {
+      jToConsole("AREA FARMER: falling back to player inventory; seed-bag windows could not be opened.");
+   }
+
+   jToConsole("AREA FARMER: select the plowed field.");
+   var rect = selectAreaInRect_mouse("Select the plowed field");
+   if (rect == null || rect[4] == null) return;
+   var harvested = [];
+   var cycle = 1;
+   while (!areaFarmerStop) {
+      var harvestedThisCycle = areaFarmerHarvestAndPlantCycle(profile, rect, harvested, cycle);
+      if (harvestedThisCycle == 0) break;
+      if (areaFarmerSeedItems(profile, checkInventory()).length == 0) {
+         jToConsole("AREA FARMER: no matching " + profile.label + " seeds remain; planting stopped.");
+         break;
+      }
+      /* Planting can free seed-bag slots. Re-scan and run another harvest /
+       * planting cycle until no mature crop or capacity remains. */
+      cycle++;
+   }
+   jToConsole("AREA FARMER: finished after " + (cycle - 1) + " cycle(s).");
 }
 
 function main() {
    jDropLastWindow();
-   openAllSeedbags();
-   var blist = ["Carrot", "Poppy", "Wheat", "Hemp", "Beetroot", "Grapes", "Tea", "Flax", "Pepper","Hops", "Carrot Seed","Peas","Onions","Tobacco","Pepper","Pumpkin", "Exit"];
-   var selectWindow = jGUIWindow(jCoord(250, 250), jCoord(250, blist.length * 25 + 50), "Solaris Farm Bot");
-   var label = jGUILabel(selectWindow, jCoord(0, 0), "To start the bot, stand in a corner of a farm plot");
-   var label = jGUILabel(selectWindow, jCoord(0, 12), "and press the button below that matches crop type.");
-   var label = jGUILabel(selectWindow, jCoord(0, 24), "Some bots will have special instructions for operation.");
-   var label = jGUILabel(selectWindow, jCoord(0, 36), "Pay attention to any popup messages in red.");
-   for(var i = 0; i < blist.length; i++)
-      jGUIButton(selectWindow, jCoord(5, 60 + i*25),  240, blist[i]);
-   selectWindow.toggleCloseButton();
-   var btext = selectWindow.waitButtonClick();
-   if(btext == blist[0]) harvester = new CarrotHarvester();
-   if(btext == blist[1]) harvester = new PoppyHarvester();
-   if(btext == blist[2]) harvester = new WheatHarvester();
-   if(btext == blist[3]) harvester = new HempHarvester();
-   if(btext == blist[4]) harvester = new BeetHarvester();
-   if(btext == blist[5]) {
-      selectWindow.destroy();
-      harvester = new WineHarvester();
-      if(!harvester.selectObjects()) return;
-      if(!harvester.selectRect()) return;
-      if(!harvester.processHarvesting()) return;
-      harvester.plantGrapes();
-      return;
-   }
-   if(btext == blist[6]) {
-      harvester = new TeaHarvester();
-      //if(!harvester.selectObjects()) return;
-   }
-   if(btext == blist[7]) harvester = new FlaxHarvester();
-   if(btext == blist[8]) harvester = new PepperHarvester();
-   if(btext == blist[9]) harvester = new HopsHarvester();
-   if(btext == blist[10]) harvester = new CarrotSeedHarvester();
-   if(btext == blist[11]) harvester = new PeasHarvester();
-   if(btext == blist[12]) harvester = new OnionsHarvester();
-   if(btext == blist[13]) harvester = new TobaccoHarvester();
-   if(btext == blist[14]) harvester = new PepperHarvester();
-   if(btext == blist[15]) harvester = new PumpkinHarvester();
-   if(btext == blist[blist.length - 1]) {selectWindow.destroy(); return;}
-   selectWindow.destroy();
-   while (!stopFlag) {
-      var crop = findCrop(harvester);
-      if (crop == -1) break; // No crops found
-	  dropFromCursor(1);
-      drinkWater();
-      equipScythe();
-      if (!jIsPathFree(crop.position())) {
-         resetCursor();
-         jPFMove(crop.position());
-         jWaitStartMove();
-         waitPFEndMove();
-         while (jIsMoving() || jMyCoords().dist(crop.position()) > 1) {
-            jSleep(100);
-         }
-      }
-      jSendAction("harvest");
-      jWaitCursor("harvest", actionTimeout);
-      jDoClick(crop.getID(), 1, 0);
-      jWaitProgress();
-      harvester.processHarvestedGoods();
-      plantNewCrop(harvester, false);
+   try {
+      runAreaFarmer();
+   } catch (ex) {
+      jToConsole("AREA FARMER ERROR: " + ex);
+      jPrint("AREA FARMER ERROR: " + ex);
    }
 }
 

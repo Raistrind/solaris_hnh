@@ -88,6 +88,10 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 	double scales[] = { 0.5, 0.66, 0.8, 0.9, 1, 1.25, 1.5, 1.75, 2 };
 	Map<String, Integer> radiuses;
 	Map<String, Integer> terobjradiuses;
+	private static final long CART_DEPOSIT_TIMEOUT = 60000;
+	private boolean pendingCartDeposit;
+	private Item pendingCartDepositItem;
+	private long pendingCartDepositUntil;
 	int beast_check_delay = 0;
 	public boolean player_moving = false;
 	public boolean objectSelecting = false; //used for JS selectObject
@@ -96,6 +100,11 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 	public Coord myLastCoord;				//my last coord
 	private Gob flowerMenuTarget = null;
 	private long flowerMenuTargetTime = 0;
+	/* Kept until the corresponding flower-menu choice is acknowledged. This is
+	 * separate from the display target, which the menu constructor consumes. */
+	private Gob qualitySurveyTarget = null;
+	private Coord qualitySurveyTargetTile = null;
+	private long qualitySurveyTargetTime = 0;
 	//private ArrayList<Integer> ignoredObjects = new ArrayList<Integer>();
 	
 	
@@ -801,6 +810,73 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 		flowerMenuTargetTime = System.currentTimeMillis();
 	}
 
+	private void rememberQualitySurveyTarget(Gob target, Coord tile) {
+		qualitySurveyTarget = target;
+		qualitySurveyTargetTile = (tile == null) ? null : new Coord(tile);
+		qualitySurveyTargetTime = System.currentTimeMillis();
+	}
+
+	private void clearQualitySurveyTarget() {
+		qualitySurveyTarget = null;
+		qualitySurveyTargetTile = null;
+		qualitySurveyTargetTime = 0;
+	}
+
+	private String terrainSurveyType(Coord tile) {
+		return (tile == null) ? null : QualitySurveyStore.terrainType(map.gettileres(tile));
+	}
+
+	private void armDigQualitySurvey(Coord tile) {
+		String terrain = (tile == null) ? null : map.gettileres(tile);
+		/* Terrain cannot reliably identify soil versus clay (grass and shallow
+		 * water clay nodes are both normal cases). The returned item resolves it. */
+		if ((terrain == null) || (MiniMap.isPrimaryInterior())) return;
+		MiniMap.armQualitySurvey(map, tile, QualitySurveyStore.SOIL_OR_CLAY);
+	}
+
+	/* Arm only after the player selected a qualifying server flower action.
+	 * This avoids attributing a cancelled menu or another action to the prior
+	 * right-click target. */
+	public void armQualitySurveyForFlowerAction(String action) {
+		MiniMap.clearQualitySurveyPending();
+		if ((qualitySurveyTargetTime == 0) || ((System.currentTimeMillis() - qualitySurveyTargetTime) > 10000)) {
+			clearQualitySurveyTarget();
+			return;
+		}
+		String type = null;
+		Coord tile = qualitySurveyTargetTile;
+		if ("pick".equalsIgnoreCase(action) && isLikelyForage(qualitySurveyTarget)) {
+			type = QualitySurveyStore.FORAGE;
+			tile = qualitySurveyTarget.position().div(tileSize);
+		} else if ("dig".equalsIgnoreCase(action)) {
+			clearQualitySurveyTarget();
+			armDigQualitySurvey(tile);
+			return;
+		} else if ("collect".equalsIgnoreCase(action)) {
+			type = terrainSurveyType(tile);
+			if (!QualitySurveyStore.WATER.equals(type)) type = null;
+		} else if (("fish".equalsIgnoreCase(action) || "fishing".equalsIgnoreCase(action))
+				&& QualitySurveyStore.WATER.equals(terrainSurveyType(tile))) {
+			/* A catch is recorded only after the server accepted a Fish action on
+			 * an actual water tile. Item.observe additionally requires the result
+			 * resource itself to be fish. */
+			type = QualitySurveyStore.FISH;
+		}
+		clearQualitySurveyTarget();
+		if ((type != null) && !MiniMap.isPrimaryInterior()) MiniMap.armQualitySurvey(map, tile, type);
+	}
+
+	public void cancelQualitySurveyFlowerAction() {
+		MiniMap.clearQualitySurveyPending();
+		clearQualitySurveyTarget();
+	}
+
+	private boolean isLikelyForage(Gob gob) {
+		String name = (gob == null) ? "" : gob.resname().toLowerCase(Locale.US);
+		return name.contains("/herbs/") || name.contains("/herb/") ||
+				name.contains("/forage/") || name.contains("mushroom");
+	}
+
 	public FlowerMenuTargetInfo consumeFlowerMenuTargetInfo() {
 		Gob target = flowerMenuTarget;
 		long targetTime = flowerMenuTargetTime;
@@ -822,15 +898,18 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 		Coord c0 = c;
 		c = new Coord((int) (c.x / getScale()), (int) (c.y / getScale()));
 		Gob hit = gobatpos(c);
-		if (button == 3)
-			rememberFlowerMenuTarget(hit);
-		// PF
-		if (path != null && button != 3) {
-			path.clear();
-			path_moving = false;
-			path_step = 0;
-			path_interact_object = null;
+		if (button == 3) {
+			/* Every candidate starts clean: a cancelled/failed action must never
+			 * leave an older target armed for a later item result. */
+			MiniMap.clearQualitySurveyPending();
+			clearQualitySurveyTarget();
+			if (Config.quickDepositToCart && (hit != null))
+				armPendingCartDeposit(null);
 		}
+		// A fresh normal click supersedes an active route. Preserve the explicit
+		// Ctrl+Shift-right path-interaction gesture long enough to replace it.
+		if ((path != null) && !((button == 3) && ui.modctrl && ui.modshift))
+			clear_pf_path();
 		//Kerri
 		if(objectSelecting)
 		{
@@ -839,6 +918,23 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 			return true;
 		}
 		Coord mc = s2m(c.add(viewoffset(sz, this.mc).inv()));
+		boolean digCursor = false;
+		if (button == 1) {
+			/* Normal Dig is a MenuGrid cursor followed by a left map click, not a
+			 * flower-menu option. Replace any older candidate before considering it. */
+			MiniMap.clearQualitySurveyPending();
+			clearQualitySurveyTarget();
+			String cursor = ((ui.root == null) || (ui.root.cursor == null)) ? null : ui.root.cursor.name;
+			if ("gfx/hud/curs/dig".equals(cursor)) {
+				digCursor = true;
+				Coord tile = mc.div(tileSize);
+				armDigQualitySurvey(tile);
+			}
+		}
+		if (button == 3) {
+			rememberFlowerMenuTarget(hit);
+			rememberQualitySurveyTarget(hit, mc.div(tileSize));
+		}
 		if (grab != null) {
 			try {
 				grab.mmousedown(mc, button);
@@ -865,15 +961,49 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 					hit.setDrawOlay(!hit.getDrawOlay());
 			}
 			// PF
-			if (button == 3 && ui.modctrl && ui.modshift) {
+			if (button == 3 && ui.modctrl && ui.modshift && !isInBoat()) {
+				clear_pf_path();
 				rememberFlowerMenuTarget(null);
+				clearQualitySurveyTarget();
 				if (hit == null)
 					path_interact_object = null;
 				else
 					path_interact_object = hit;
 				path = APXUtils._pf_find_path(mc, path_interact_object != null ? path_interact_object.id : 0);
+				begin_pf_path(path, path_interact_object);
 				update_pf_moving();
 				return true;
+			}
+			/* Keep normal right-clicks as immediate world interactions (doors,
+			 * items, and flower menus). Plain left-click is the pathfinding move
+			 * gesture; modifiers and placement mode retain their native behavior. */
+			if ((button == 1) && (ui.modflags() == 0) && !digCursor) {
+				/* A new player movement command supersedes any queued local move and
+				 * is sent immediately below, so the server retargets from the current
+				 * position rather than finishing the old route first. */
+				glob.oc.movequeue.clear();
+				moveto = null;
+				if (!isPushingPlow() && !isInBoat()) {
+					Coord destination = Config.assign_to_tile ? tilify(mc) : mc;
+					path = APXUtils._pf_find_path(destination, 0);
+					if ((path != null) && (path.size() > 1)) {
+						boolean directFinal = APXUtils._pf_is_safe_segment(
+								path.get(path.size() - 2), destination);
+						if (directFinal)
+							path.set(path.size() - 1, new Coord(destination));
+						begin_pf_path(path, null);
+						path_final_exact = directFinal;
+						update_pf_moving();
+						return true;
+					}
+					/* The local map can be incomplete or the point can be unreachable.
+					 * Preserve the server's normal click handling in that case. */
+					clear_pf_path();
+				}
+				/* Plowing has server-side movement constraints. Let the native direct
+				 * click handle it instead of issuing a queued route. */
+				if (isPushingPlow())
+					clear_pf_path();
 			}
 			if (hit == null) {
 				if (button == 1 && ui.modshift) {
@@ -2165,11 +2295,16 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 		}
 		// ###############
 		// PF 
-		if (path != null && path.size() > 1) {
+		if (path != null && path_step < path.size()) {
 			Coord oc = viewoffset(sz, mc);
 			g.chcolor(Color.green);
-			for (int i = 0; i < path.size() - 1; i++) {
-				g.line(m2s(path.get(i)).add(oc), m2s(path.get(i + 1)).add(oc), 2);
+			Coord from = myLastCoord;
+			if (from == null)
+				from = path.get(path_step);
+			for (int i = path_step; i < path.size(); i++) {
+				Coord to = path.get(i);
+				g.line(m2s(from).add(oc), m2s(to).add(oc), 2);
+				from = to;
 			}
 			g.chcolor();
 		}
@@ -2236,16 +2371,190 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 	}
 
 	public boolean iteminteract(Coord cc, Coord ul) {
+		return iteminteract(cc, ul, null);
+	}
+
+	public boolean iteminteract(Coord cc, Coord ul, Item heldItem) {
+		/* Item use is a new collection candidate even when it ultimately is not a
+		 * surveyable one; discard any prior pending action first. */
+		MiniMap.clearQualitySurveyPending();
+		clearQualitySurveyTarget();
 		Coord cc0 = cc;
 		cc = new Coord((int) (cc.x / getScale()), (int) (cc.y / getScale()));
 		Gob hit = gobatpos(cc);
+		if (Config.quickDepositToCart &&
+				quickDepositToCart(hit, heldItem))
+			return (true);
 		Coord mc = s2m(cc.add(viewoffset(sz, this.mc).inv()));
+		String surveyType = null;
+		if (QualitySurveyStore.isWaterContainer(heldItem)) {
+			surveyType = terrainSurveyType(mc.div(tileSize));
+			String targetName = (hit == null) ? "" : hit.resname().toLowerCase(Locale.US);
+			if (!QualitySurveyStore.WATER.equals(surveyType)
+					&& (targetName.contains("water") || targetName.contains("well")))
+				surveyType = QualitySurveyStore.WATER;
+			if (!QualitySurveyStore.WATER.equals(surveyType)) surveyType = null;
+		}
+		if ((surveyType != null) && !MiniMap.isPrimaryInterior())
+			MiniMap.armQualitySurvey(map, mc.div(tileSize), surveyType);
 		if (Config.assign_to_tile) mc = tilify(mc);
 		if (hit == null)
 			wdgmsg("itemact", cc0, mc, ui.modflags());
 		else
 			wdgmsg("itemact", cc0, mc, ui.modflags(), hit.id, hit.position());
 		return (true);
+	}
+
+	private boolean quickDepositToCart(Gob hit, Item held) {
+		if (held == null)
+			held = heldItem();
+		if (held == null) {
+			clearPendingCartDeposit();
+			return false;
+		}
+		Inventory cart = singleOpenCartInventory();
+		if (cart == null) {
+			if (hit != null)
+				armPendingCartDeposit(held);
+			return false;
+		}
+		if (!isCart(hit)) {
+			clearPendingCartDeposit();
+			return false;
+		}
+		clearPendingCartDeposit();
+		Coord slot = cart.firstFreeSlot(held);
+		if (slot == null)
+			return false;
+		dropIntoCartSlot(cart, slot);
+		return true;
+	}
+
+	private static boolean isCart(Gob gob) {
+		if (gob == null)
+			return false;
+		for (String resourceName : gob.resnames()) {
+			String name = resourceName.toLowerCase(Locale.ENGLISH);
+			if (name.equals("gfx/kritter/cart") ||
+					name.startsWith("gfx/kritter/cart/"))
+				return true;
+		}
+		return false;
+	}
+
+	private void armPendingCartDeposit(Item held) {
+		pendingCartDeposit = true;
+		pendingCartDepositItem = held;
+		pendingCartDepositUntil = System.currentTimeMillis() +
+				CART_DEPOSIT_TIMEOUT;
+	}
+
+	public void completePendingCartDeposit(Window cartWindow) {
+		if (!pendingCartDeposit)
+			return;
+		if (!Config.quickDepositToCart ||
+				(System.currentTimeMillis() > pendingCartDepositUntil)) {
+			clearPendingCartDeposit();
+			return;
+		}
+		List<Avaview> avatarSlots = new ArrayList<Avaview>();
+		collectAvatarSlots(cartWindow, avatarSlots);
+		if (!avatarSlots.isEmpty()) {
+			clearPendingCartDeposit();
+			for (Avaview slot : avatarSlots) {
+				if (slot.isEmptySlot()) {
+					slot.mousedown(slot.sz.div(2), 1);
+					break;
+				}
+			}
+			return;
+		}
+
+		List<Inventory> inventories = new ArrayList<Inventory>();
+		collectVisibleInventories(cartWindow, inventories);
+		if (inventories.size() == 1) {
+			Item held = pendingCartDepositItem;
+			if ((held == null) || !held.isDragging ||
+					(held.ui != ui) || (ui.getId(held) < 0))
+				held = heldItem();
+			if (held == null)
+				return;
+			Coord slot = inventories.get(0).firstFreeSlot(held);
+			clearPendingCartDeposit();
+			if (slot != null)
+				dropIntoCartSlot(inventories.get(0), slot);
+		}
+	}
+
+	private static void dropIntoCartSlot(Inventory cart, Coord slot) {
+		Coord point = slot.mul(Inventory.invSqSize);
+		cart.drop(point, point);
+	}
+
+	private void clearPendingCartDeposit() {
+		pendingCartDeposit = false;
+		pendingCartDepositItem = null;
+		pendingCartDepositUntil = 0;
+	}
+
+	private Item heldItem() {
+		return findHeldItem(ui.root);
+	}
+
+	private static Item findHeldItem(Widget widget) {
+		for (Widget child = widget.child; child != null; child = child.next) {
+			if ((child instanceof Item) && ((Item) child).isDragging)
+				return (Item) child;
+			Item found = findHeldItem(child);
+			if (found != null)
+				return found;
+		}
+		return null;
+	}
+
+	private Inventory singleOpenCartInventory() {
+		List<Inventory> found = new ArrayList<Inventory>();
+		collectOpenCartInventories(ui.root, found);
+		return (found.size() == 1) ? found.get(0) : null;
+	}
+
+	private static void collectOpenCartInventories(Widget widget,
+			List<Inventory> found) {
+		if (!widget.visible)
+			return;
+		if (widget instanceof Window) {
+			Window window = (Window) widget;
+			if ((window.cap != null) && window.cap.text.equals("Cart")) {
+				collectVisibleInventories(window, found);
+				return;
+			}
+		}
+		for (Widget child = widget.child; child != null; child = child.next)
+			collectOpenCartInventories(child, found);
+	}
+
+	private static void collectVisibleInventories(Widget widget,
+			List<Inventory> found) {
+		for (Widget child = widget.child; child != null; child = child.next) {
+			if (!child.visible)
+				continue;
+			if (child instanceof Inventory)
+				found.add((Inventory) child);
+			else
+				collectVisibleInventories(child, found);
+		}
+	}
+
+	private static void collectAvatarSlots(Widget widget,
+			List<Avaview> found) {
+		for (Widget child = widget.child; child != null; child = child.next) {
+			if (!child.visible)
+				continue;
+			if (child instanceof Avaview)
+				found.add((Avaview) child);
+			else
+				collectAvatarSlots(child, found);
+		}
 	}
 
 	private Map<String, Console.Command> cmdmap = new TreeMap<String, Console.Command>();
@@ -2296,7 +2605,93 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 	int path_step = 0;
 	boolean path_moving = false;
 	Gob path_interact_object = null;
+	private static final long PF_STALL_TIMEOUT = 10000;
+	private static final long PF_FORCED_RETRY_DELAY = 750;
+	private static final int PF_ARRIVAL_TOLERANCE = 3;
+	private Coord path_last_position;
+	private long path_last_progress;
+	private boolean path_force_next;
+	private Coord path_force_target;
+	private long path_force_retry_at;
+	private long path_force_progress_at;
+	private boolean path_force_retried;
+	private boolean path_final_exact;
 	boolean draw_pf_map = false;
+
+	private void clear_pf_path() {
+		path = null;
+		path_step = 0;
+		path_moving = false;
+		path_interact_object = null;
+		path_last_position = null;
+		path_last_progress = 0;
+		path_force_next = false;
+		path_force_target = null;
+		path_force_retry_at = 0;
+		path_force_progress_at = 0;
+		path_force_retried = false;
+		path_final_exact = false;
+	}
+
+	private void begin_pf_path(ArrayList<Coord> route, Gob interactionTarget) {
+		clear_pf_path();
+		path = route;
+		path_interact_object = interactionTarget;
+		/* The first A* node is the current tile. Never walk back to its centre
+		 * before taking the newly requested route. */
+		if ((route != null) && !route.isEmpty())
+			path_step = 1;
+		if (myLastCoord != null)
+			path_last_position = new Coord(myLastCoord);
+		path_last_progress = System.currentTimeMillis();
+		path_force_next = true;
+	}
+
+	private boolean isPushingPlow() {
+		if (playergob < 0)
+			return false;
+		synchronized (glob.oc) {
+			for (Gob gob : glob.oc) {
+				if (gob.id == playergob)
+					continue;
+				Following following = gob.getattr(Following.class);
+				if ((following == null) || (following.tgt != playergob))
+					continue;
+				for (String resourceName : gob.resnames()) {
+					if (resourceName.startsWith("gfx/kritter/plow/"))
+						return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * A player seated in a boat is represented by the server as following the
+	 * boat gob.  Pathfinding is inappropriate in that state: movement commands
+	 * are interpreted relative to the vessel and can interfere with sailing.
+	 */
+	private boolean isInBoat() {
+		if (playergob < 0)
+			return false;
+		Gob player;
+		synchronized (glob.oc) {
+			player = glob.oc.getgob(playergob);
+		}
+		if (player == null)
+			return false;
+		Following following = player.getattr(Following.class);
+		if (following == null)
+			return false;
+		Gob target = following.tgt();
+		if (target == null)
+			return false;
+		for (String resourceName : target.resnames()) {
+			if ((resourceName != null) && resourceName.toLowerCase(Locale.US).contains("boat"))
+				return true;
+		}
+		return false;
+	}
 	
 	public void toggle_draw_pf() {
 		if (!draw_pf_map) {
@@ -2308,23 +2703,20 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 	}
 	
 	public int map_pf_move(Coord real_coord) {
-		if (path != null) {
-			path.clear();
-			path_moving = false;
-			path_step = 0;
-			path_interact_object = null;
+		if (isInBoat()) {
+			clear_pf_path();
+			return -1;
 		}
-		path = APXUtils._pf_find_path(real_coord, 0);
+		ArrayList<Coord> route = APXUtils._pf_find_path(real_coord, 0);
+		begin_pf_path(route, null);
 		update_pf_moving();
 		return path == null ? -1 : path.size();
 	}
 	
 	public int map_pf_interact(int id) {
-		if (path != null) {
-			path.clear();
-			path_moving = false;
-			path_step = 0;
-			path_interact_object = null;
+		if (isInBoat()) {
+			clear_pf_path();
+			return -1;
 		}
 		Gob pgob;
 		synchronized (glob.oc) {
@@ -2332,8 +2724,8 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 		}
 		if (pgob == null)
 			return -1;
-		path_interact_object = pgob;
-		path = APXUtils._pf_find_path(pgob.position(), id);
+		ArrayList<Coord> route = APXUtils._pf_find_path(pgob.position(), id);
+		begin_pf_path(route, pgob);
 		update_pf_moving();
 		return path == null ? -1 : path.size();
 	}
@@ -2341,30 +2733,69 @@ public class MapView extends Widget implements DTarget, Console.Directory {
 	public void update_pf_moving() {
 		if (path == null)
 			return;
-		if (JSBotUtils.isMoving()) return;
-		
-		if (path_step < path.size()) {
-			if (myLastCoord.equals(path.get(path_step))) {
-				path_moving = false;
-				path_step++;
-			}
+		if (isPushingPlow() || isInBoat()) {
+			clear_pf_path();
+			return;
 		}
-		if (path_moving) return;
-		if (path_step < path.size()) {
-			if (path.size() - path_step == 1 && path_interact_object != null) {
-				//click, (261, 284), (-4062515, 1117484), 3, 0, -1725142871, (-4062515, 1117495)
-				wdgmsg("click", JSBotUtils.getCenterScreenCoord(), path_interact_object.position(), 3, 0, path_interact_object.id, path_interact_object.position());
-				path_step++;
-			} else {
-				path_moving = true;
-				Coord togo = path.get(path_step);
-				wdgmsg("click", JSBotUtils.getCenterScreenCoord(), tilify(togo), 1, 0);
-			}
-		} else {
-			path = null;
-			path_step = 0;
+		long now = System.currentTimeMillis();
+		if (myLastCoord == null) {
+			clear_pf_path();
+			return;
+		}
+		if ((path_last_position == null) || !path_last_position.equals(myLastCoord)) {
+			path_last_position = new Coord(myLastCoord);
+			path_last_progress = now;
+		}
+		if ((now - path_last_progress) > PF_STALL_TIMEOUT) {
+			clear_pf_path();
+			return;
+		}
+		if ((path_force_target != null) && !path_force_retried
+				&& (now >= path_force_retry_at)
+				&& (path_last_progress <= path_force_progress_at)
+				&& (myLastCoord.dist(path_force_target) > PF_ARRIVAL_TOLERANCE)) {
+			/* A fresh movement command normally replaces the server target. Retry
+			 * the same collision-checked waypoint once promptly if it was ignored. */
+			wdgmsg("click", JSBotUtils.getCenterScreenCoord(),
+					path_command_destination(path_force_target), 1, 0);
+			path_force_retried = true;
 			path_moving = false;
 		}
+		if (JSBotUtils.isMoving() && !path_force_next) return;
+		
+		if (path_step < path.size()) {
+			if (myLastCoord.dist(path.get(path_step)) <= PF_ARRIVAL_TOLERANCE) {
+				path_moving = false;
+				path_step++;
+				path_last_progress = now;
+				path_force_target = null;
+			}
+		}
+		if (path_moving && !path_force_next) return;
+		if (path_step < path.size()) {
+			path_moving = true;
+			Coord togo = path.get(path_step);
+			wdgmsg("click", JSBotUtils.getCenterScreenCoord(),
+					path_command_destination(togo), 1, 0);
+			if (path_force_next) {
+				path_force_target = togo;
+				path_force_retry_at = now + PF_FORCED_RETRY_DELAY;
+				path_force_progress_at = path_last_progress;
+			}
+			path_force_next = false;
+		} else {
+			if (path_interact_object != null) {
+				rememberFlowerMenuTarget(path_interact_object);
+				wdgmsg("click", JSBotUtils.getCenterScreenCoord(), path_interact_object.position(), 3, 0, path_interact_object.id, path_interact_object.position());
+			}
+			clear_pf_path();
+		}
+	}
+
+	private Coord path_command_destination(Coord waypoint) {
+		if (path_final_exact && (path_step == path.size() - 1))
+			return waypoint;
+		return tilify(waypoint);
 	}
 	
 	@Override

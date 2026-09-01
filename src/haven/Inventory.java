@@ -47,6 +47,7 @@ public class Inventory extends Widget implements DTarget {
 	private final Button transferAll;
 	private final Button transferPresent;
 	private final Button sortButton;
+	private final Button takeEggs;
 	private final InventorySorter sorter;
 	private final AtomicBoolean wait = new AtomicBoolean(false);
 
@@ -101,11 +102,24 @@ public class Inventory extends Widget implements DTarget {
 				}
 			};
 			sorter = new InventorySorter(this, sortButton);
+			takeEggs = null;
+		} else if ((parent instanceof Window) &&
+				isChickenCoopWindow((Window) parent)) {
+			transferAll = null;
+			transferPresent = null;
+			sortButton = null;
+			sorter = null;
+			takeEggs = new Button(Coord.z, 110, this, "Take Eggs") {
+				public void click() {
+					takeEggItems();
+				}
+			};
 		} else {
 			transferAll = null;
 			transferPresent = null;
 			sortButton = null;
 			sorter = null;
+			takeEggs = null;
 		}
 
 		// removed trash can from inventory -trev
@@ -142,6 +156,119 @@ public class Inventory extends Widget implements DTarget {
 	
 	public Coord size() {
 		return isz;
+	}
+
+	public Coord firstFreeSlot(Item candidate) {
+		Coord candidateSize = normalizedItemSize(candidate);
+		if ((candidateSize.x > isz.x) || (candidateSize.y > isz.y))
+			return null;
+
+		boolean[][] occupied = new boolean[isz.x][isz.y];
+		for (Widget wdg = child; wdg != null; wdg = wdg.next) {
+			if (!wdg.visible || !(wdg instanceof Item))
+				continue;
+			Item item = (Item) wdg;
+			Coord position = item.coord();
+			Coord itemSize = normalizedItemSize(item);
+			if (!withinInventory(position, itemSize))
+				return null;
+			for (int y = 0; y < itemSize.y; y++)
+				for (int x = 0; x < itemSize.x; x++)
+					occupied[position.x + x][position.y + y] = true;
+		}
+
+		for (int y = 0; y <= isz.y - candidateSize.y; y++) {
+			for (int x = 0; x <= isz.x - candidateSize.x; x++) {
+				boolean free = true;
+				for (int yy = 0; yy < candidateSize.y && free; yy++) {
+					for (int xx = 0; xx < candidateSize.x; xx++) {
+						if (occupied[x + xx][y + yy]) {
+							free = false;
+							break;
+						}
+					}
+				}
+				if (free)
+					return new Coord(x, y);
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Returns whether all of the supplied items can be placed in this
+	 * inventory at the same time. The optional ignored item is treated as
+	 * removed while checking; this is useful when an item is being moved out
+	 * of the inventory to equip it.
+	 */
+	boolean canFitItems(List<Item> candidates, Item ignored) {
+		if (candidates == null || candidates.isEmpty())
+			return true;
+		boolean[][] occupied = new boolean[isz.x][isz.y];
+		for (Widget wdg = child; wdg != null; wdg = wdg.next) {
+			if (!wdg.visible || !(wdg instanceof Item) || wdg == ignored)
+				continue;
+			Item item = (Item) wdg;
+			Coord position = item.coord();
+			Coord itemSize = normalizedItemSize(item);
+			if (!withinInventory(position, itemSize))
+				return false;
+			for (int y = 0; y < itemSize.y; y++)
+				for (int x = 0; x < itemSize.x; x++)
+					occupied[position.x + x][position.y + y] = true;
+		}
+		List<Coord> sizes = new ArrayList<Coord>();
+		for (Item item : candidates) {
+			if (item == null)
+				continue;
+			Coord size = normalizedItemSize(item);
+			if ((size.x > isz.x) || (size.y > isz.y))
+				return false;
+			sizes.add(size);
+		}
+		return canFitItemSizes(occupied, sizes, 0);
+	}
+
+	private boolean canFitItemSizes(boolean[][] occupied, List<Coord> sizes,
+			int index) {
+		if (index >= sizes.size())
+			return true;
+		Coord size = sizes.get(index);
+		for (int y = 0; y <= isz.y - size.y; y++) {
+			for (int x = 0; x <= isz.x - size.x; x++) {
+				boolean free = true;
+				for (int yy = 0; yy < size.y && free; yy++) {
+					for (int xx = 0; xx < size.x; xx++) {
+						if (occupied[x + xx][y + yy]) {
+							free = false;
+							break;
+						}
+					}
+				}
+				if (!free)
+					continue;
+				for (int yy = 0; yy < size.y; yy++)
+					for (int xx = 0; xx < size.x; xx++)
+						occupied[x + xx][y + yy] = true;
+				if (canFitItemSizes(occupied, sizes, index + 1))
+					return true;
+				for (int yy = 0; yy < size.y; yy++)
+					for (int xx = 0; xx < size.x; xx++)
+						occupied[x + xx][y + yy] = false;
+			}
+		}
+		return false;
+	}
+
+	private static Coord normalizedItemSize(Item item) {
+		Coord size = item.size();
+		return new Coord(Math.max(1, size.x), Math.max(1, size.y));
+	}
+
+	private boolean withinInventory(Coord position, Coord itemSize) {
+		return (position.x >= 0) && (position.y >= 0) &&
+				(position.x + itemSize.x <= isz.x) &&
+				(position.y + itemSize.y <= isz.y);
 	}
 
 	public boolean drop(Coord cc, Coord ul) {
@@ -339,6 +466,31 @@ public class Inventory extends Widget implements DTarget {
 				title.equals("Basket");
 	}
 
+	private static boolean isChickenCoopWindow(Window wnd) {
+		return (wnd != null) && (wnd.cap != null) &&
+				wnd.cap.text.equalsIgnoreCase("Chicken Coop");
+	}
+
+	private void takeEggItems() {
+		List<Item> eggs = new ArrayList<Item>();
+		for (Widget wdg = lchild; wdg != null; wdg = wdg.prev) {
+			if (wdg.visible && (wdg instanceof Item) && isEgg((Item) wdg))
+				eggs.add((Item) wdg);
+		}
+		for (Item egg : eggs)
+			egg.wdgmsg("transfer", Coord.z);
+	}
+
+	private static boolean isEgg(Item item) {
+		if (item == null)
+			return false;
+		String resource = item.GetResName();
+		if ((resource != null) && resource.toLowerCase().contains("egg"))
+			return true;
+		String name = item.name();
+		return (name != null) && name.toLowerCase().contains("egg");
+	}
+
 	private boolean needshift() {
 		if (parent instanceof Window) {
 			Window wnd = (Window) parent;
@@ -386,6 +538,13 @@ public class Inventory extends Widget implements DTarget {
 		}
 		if ((transferAll != null) && (parent instanceof Window))
 			((Window) parent).growToFit(this);
+		else if ((takeEggs != null) && (parent instanceof Window)) {
+			takeEggs.c = new Coord(0, gridsz.y + 3);
+			takeEggs.sz.x = Math.max(110, gridsz.x);
+			sz = new Coord(takeEggs.sz.x,
+					takeEggs.c.y + takeEggs.sz.y);
+			((Window) parent).growToFit(this);
+		}
 	}
 
 	protected boolean checkTrashButton(Widget w) {

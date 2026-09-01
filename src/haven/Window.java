@@ -163,6 +163,9 @@ public class Window extends Widget implements DTarget {
 	public void update(long dt) {
 		keepOnScreen();
 		super.update(dt);
+		if (Config.quickDepositToCart && (cap != null) &&
+				cap.text.equals("Cart") && (ui.mainview != null))
+			ui.mainview.completePendingCartDeposit(this);
 	}
 
 	public void draw(GOut og) {

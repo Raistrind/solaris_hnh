@@ -67,23 +67,34 @@ public class Makewindow extends HWindow {
 				&& (Config.explanationLevel > 0);
 		String pathAdvice = Config.showSpecializationAdvice ? Specialization
 				.recipeAdvice(rcpnm) : "";
-		if (showQualityHelp || (pathAdvice.length() > 0)) {
-			setsz(new Coord(430, (pathAdvice.length() > 0) ? 180 : 145));
+		String fuelAdvice = LegacyFuelGuide.forRecipe(rcpnm);
+		int infoRows = (showQualityHelp ? 1 : 0)
+				+ ((pathAdvice.length() > 0) ? 1 : 0)
+				+ ((fuelAdvice.length() > 0) ? 1 : 0);
+		if (infoRows > 0)
+			setsz(new Coord(430, 110 + (35 * infoRows)));
+		int infoY = 105;
+		if (fuelAdvice.length() > 0) {
+			Label fuelLabel = new Label(new Coord(10, infoY), this, "Fuel:");
+			fuelLabel.setcolor(new Color(190, 145, 30));
+			new Label(new Coord(50, infoY - 3), this, fuelAdvice, 365);
+			infoY += 35;
 		}
 		if (showQualityHelp) {
 			if (Config.showTerminologyLinks)
-				new KnowledgeLink(new Coord(10, 105), this, "Quality help",
+				new KnowledgeLink(new Coord(10, infoY), this, "Quality help",
 						"term-quality", KnowledgeBase.craftingQualityText());
 			else
-				new Label(new Coord(10, 105), this, "Quality:");
-			new Label(new Coord(90, 102), this, KnowledgeBase
+				new Label(new Coord(10, infoY), this, "Quality:");
+			new Label(new Coord(90, infoY - 3), this, KnowledgeBase
 					.craftingQualityText(), 325);
+			infoY += 32;
 		}
 		if (pathAdvice.length() > 0) {
-			Label pathLabel = new Label(new Coord(10, showQualityHelp ? 137 : 105),
+			Label pathLabel = new Label(new Coord(10, infoY),
 					this, "Path:");
 			pathLabel.setcolor(new Color(190, 145, 30));
-			new Label(new Coord(50, showQualityHelp ? 134 : 102), this,
+			new Label(new Coord(50, infoY - 3), this,
 					pathAdvice, 365);
 		}
 	}

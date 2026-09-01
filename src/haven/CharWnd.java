@@ -500,6 +500,29 @@ public class CharWnd extends Window {
 			super.draw(g);
 		}
 
+		@Override
+		public Object tooltip(Coord c, boolean again) {
+			int total = 0;
+			StringBuilder detail = new StringBuilder();
+			synchronized (els) {
+				for (El el : els) {
+					if (detail.length() > 0)
+						detail.append(", ");
+					detail.append(el.id.toUpperCase(Locale.ENGLISH)).append(": ")
+							.append(String.format(Locale.US, "%.1f", el.amount / 10.0));
+					total += el.amount;
+				}
+			}
+			double current = total / 10.0;
+			double capacity = cap / 10.0;
+			double remaining = Math.max(0, cap - total) / 10.0;
+			if (detail.length() == 0)
+				detail.append("none");
+			return String.format(Locale.US,
+					"Food Event Points\n%s\nTotal: %.1f / %.1f\nRemaining: %.1f",
+					detail.toString(), current, capacity, remaining);
+		}
+
 		public void update(Object... args) {
 			cap = (Integer) args[0];
 			int sum = 0;
@@ -513,16 +536,10 @@ public class CharWnd extends Window {
 					sum += amount;
 				}
 			}
-			if (els.size() == 0) {
-				tooltip = String.format("0 of %.1f", cap / 10.0);
-			} else {
-				String tt = "";
-				for (El el : els)
-					tt += String.format("%.1f %s + ", el.amount / 10.0, el.id);
-				tt = tt.substring(0, tt.length() - 3);
-				tooltip = String.format("(%s) = %.1f of %.1f", tt, sum / 10.0,
-						cap / 10.0);
-			}
+			/* Keep the legacy field populated for callers that inspect Widget.tooltip;
+			 * the override above also computes a current, detailed value on hover. */
+			tooltip = String.format(Locale.US, "Food Event Points: %.1f / %.1f (%.1f remaining)",
+					sum / 10.0, cap / 10.0, Math.max(0, cap - sum) / 10.0);
 		}
 	}
 
@@ -896,7 +913,9 @@ public class CharWnd extends Window {
 		super(c, new Coord(400, 400), parent, "Character Sheet");
 		ui.wnd_char = this;
 		int y;
-		cattr = new Widget(Coord.z, new Coord(400, 300), this);
+		/* The FEP meter sits below the original 300px attribute panel. Include it
+		 * in the parent hitbox so its tooltip is reachable with the mouse. */
+		cattr = new Widget(Coord.z, new Coord(400, 350), this);
 		contextualLabel(new Coord(10, 10), cattr, "Base Attributes:",
 				"term-attributes", "Food raises base attributes; equipment and effects can modify current values.");
 		y = 25;
