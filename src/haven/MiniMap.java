@@ -45,6 +45,7 @@ import java.net.URLConnection;
 import java.net.URLEncoder;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
@@ -58,6 +59,12 @@ import union.KerriUtils;
 public class MiniMap extends Widget {
 	static Map<String, Tex> grids = new WeakHashMap<String, Tex>();
 	static Set<String> loading = new HashSet<String>();
+	/* A failed PNG must not become a permanent null entry in grids: detailed
+	 * persistent-map recovery keeps asking for the same nine textures after a
+	 * reconnect. Keep the retry state separately so a temporary map-server
+	 * failure recovers, without requesting a missing resource every frame. */
+	static Map<String, TileLoadFailure> gridFailures =
+			new HashMap<String, TileLoadFailure>();
 	static Loader loader = new Loader();
 	static volatile Coord mappingStartPoint = null;
 	static long mappingSession = 0;
@@ -70,6 +77,11 @@ public class MiniMap extends Widget {
 	static Map<Coord, String> coordHashes = java.util.Collections
 			.synchronizedMap(new TreeMap<Coord, String>());
 	static Map<Coord, Tex> caveTex = new TreeMap<Coord, Tex>();
+	private static final CaveMapStore recordedCaves =
+			new CaveMapStore(new File("map/persistent/caves"));
+	/* Avoid repeatedly encoding the same live cave grid from the draw loop. */
+	private static final Set<String> recordedCaveTiles =
+			java.util.Collections.synchronizedSet(new HashSet<String>());
 	/* Persistence conflicts are encountered from the render loop until the
 	 * conflicting tile is resolved. Keep the first diagnostic, but do not print
 	 * the same coordinate/hash pair every frame. */
@@ -146,6 +158,10 @@ public class MiniMap extends Widget {
 	private static volatile MapAnchor exteriorContextAnchor = null;
 	private static volatile Coord exteriorContextTile = null;
 	private static volatile Coord interiorEntranceTile = null;
+	/* The exterior tile is copied at the actual outside-to-inside transition.
+	 * It is cleared on cave-to-cave transitions so an old entrance can never be
+	 * silently used to place another underground area on the surface atlas. */
+	private static volatile Coord recordedCaveEntranceTile = null;
 	/* Set when a cave transition is observed before the player gob has supplied
 	 * a usable tile. It keeps capture retryable without persisting any link. */
 	private static volatile boolean interiorEntrancePending = false;
@@ -255,6 +271,19 @@ public class MiniMap extends Widget {
 		return (tile == null) ? null : new Coord(tile);
 	}
 
+	/** Projects a persistent-atlas tile into the current surface session. */
+	static Coord sessionTileForPersistentTile(Coord persistentTile) {
+		Coord origin = persistentMappingOrigin();
+		return ((origin == null) || (persistentTile == null)) ? null
+				: persistentTile.add(origin.mul(cmaps));
+	}
+
+	static void drawRecordedCaves(GOut g, Coord sessionCenter, Coord halfSize) {
+		if (Config.showRecordedCaveOverlay && !primaryInterior)
+			recordedCaves.draw(g, sessionCenter, halfSize,
+					Config.recordedCaveOverlayOpacity);
+	}
+
 	private static void rememberExteriorAnchor(MapAnchor anchor) {
 		if (anchor == null)
 			return;
@@ -316,11 +345,50 @@ public class MiniMap extends Widget {
 		return persistentGrid.add(origin).mul(cmaps).add(offset.mod(cmaps));
 	}
 
+	static class TileLoadFailure {
+		private static final long TRANSIENT_RETRY_INITIAL_MS = 2000;
+		private static final long TRANSIENT_RETRY_MAX_MS = 60000;
+		private static final long MISSING_RETRY_INITIAL_MS = 60000;
+		private static final long MISSING_RETRY_MAX_MS = 600000;
+		private static final long LOG_INTERVAL_MS = 60000;
+		private int attempts = 0;
+		private long nextRetryAt = 0;
+		private long lastLoggedAt = 0;
+
+		boolean eligible(long now) {
+			return now >= nextRetryAt;
+		}
+
+		void failed(long now, boolean missing) {
+			attempts++;
+			long initial = missing ? MISSING_RETRY_INITIAL_MS :
+					TRANSIENT_RETRY_INITIAL_MS;
+			long maximum = missing ? MISSING_RETRY_MAX_MS :
+					TRANSIENT_RETRY_MAX_MS;
+			long delay = initial;
+			for (int i = 1; (i < attempts) && (delay < maximum); i++)
+				delay = Math.min(maximum, delay * 2);
+			nextRetryAt = now + delay;
+		}
+
+		boolean shouldLog(long now) {
+			if ((lastLoggedAt == 0) || ((now - lastLoggedAt) >= LOG_INTERVAL_MS)) {
+				lastLoggedAt = now;
+				return true;
+			}
+			return false;
+		}
+	}
+
 	static class Loader implements Runnable {
 		Thread me = null;
 
+		private URL gridUrl(String nm) throws IOException {
+			return new URL(Config.mapurl, nm + ".png");
+		}
+
 		private InputStream getreal(String nm) throws IOException {
-			URL url = new URL(Config.mapurl, nm + ".png");
+			URL url = gridUrl(nm);
 			URLConnection c = url.openConnection();
 			c.addRequestProperty("User-Agent", "Haven/1.0");
 			InputStream s = c.getInputStream();
@@ -393,12 +461,33 @@ public class MiniMap extends Widget {
 						Tex tex = new TexI(img);
 						synchronized (grids) {
 							grids.put(grid, tex);
+							gridFailures.remove(grid);
 							loading.remove(grid);
 						}
 					} catch (IOException e) {
 						synchronized (grids) {
-							grids.put(grid, null);
+							/* A missing network tile is generally permanent, while all
+							 * other I/O failures can follow a server restart. Both are
+							 * retried, but the former is deliberately much slower. */
+							TileLoadFailure failure = gridFailures.get(grid);
+							if (failure == null) {
+								failure = new TileLoadFailure();
+								gridFailures.put(grid, failure);
+							}
+							long now = System.currentTimeMillis();
+							failure.failed(now, e instanceof FileNotFoundException);
+							grids.remove(grid);
 							loading.remove(grid);
+							if (failure.shouldLog(now)) {
+								String url;
+								try {
+									url = gridUrl(grid).toString();
+								} catch (IOException ignored) {
+									url = String.valueOf(Config.mapurl) + grid + ".png";
+								}
+								System.out.println("[MiniMap] could not load tile " +
+										url + ": " + e + "; retrying with backoff");
+							}
 						}
 					}
 				}
@@ -423,6 +512,9 @@ public class MiniMap extends Widget {
 			synchronized (grids) {
 				if (loading.contains(nm))
 					return;
+				TileLoadFailure failure = gridFailures.get(nm);
+				if ((failure != null) && !failure.eligible(System.currentTimeMillis()))
+					return;
 				loading.add(nm);
 				start();
 			}
@@ -440,6 +532,9 @@ public class MiniMap extends Widget {
 		dismissedSuggestionOrigin = null;
 		gridsHashes.clear();
 		coordHashes.clear();
+		synchronized (grids) {
+			gridFailures.clear();
+		}
 		reportedPersistenceConflicts.clear();
 		synchronized (unanchoredWaterPatterns) {
 			unanchoredWaterPatterns.clear();
@@ -460,11 +555,14 @@ public class MiniMap extends Widget {
 		synchronized (caveTex) {
 			caveTex.clear();
 		}
+		recordedCaveTiles.clear();
+		recordedCaves.reload();
 		awaitingPersistentAnchor = false;
 		persistentAnchorStatus = "Map position unresolved";
 		exteriorContextAnchor = null;
 		exteriorContextTile = null;
 		interiorEntranceTile = null;
+		recordedCaveEntranceTile = null;
 		interiorEntrancePending = false;
 		primaryInterior = false;
 		detailedReplacementCenter = null;
@@ -579,12 +677,11 @@ public class MiniMap extends Widget {
 		return (AccessController.doPrivileged(new PrivilegedAction<Tex>() {
 			public Tex run() {
 				synchronized (grids) {
-					if (grids.containsKey(nm)) {
-						return (grids.get(nm));
-					} else {
-						loader.req(nm);
-						return (null);
-					}
+					Tex grid = grids.get(nm);
+					if (grid != null)
+						return grid;
+					loader.req(nm);
+					return null;
 				}
 			}
 		}));
@@ -992,6 +1089,8 @@ public class MiniMap extends Widget {
 			if (primary && primaryInterior && caveTex.isEmpty()) {
 				interiorEntranceTile = null;
 				interiorEntrancePending = true;
+				recordedCaveEntranceTile = null;
+				recordedCaveTiles.clear();
 			}
 
 			for (int y = ulg.y; (y * cmaps.y) - tc.y + (hsz.y / 2) < hsz.y; y++) {
@@ -1171,6 +1270,12 @@ public class MiniMap extends Widget {
 			}
 			if (enteredInterior)
 				qualitySurvey.clearPending();
+			if (enteredInterior) {
+				Coord exterior = exteriorContextTile();
+				recordedCaveEntranceTile = (exterior == null) ? null
+						: new Coord(exterior);
+				recordedCaveTiles.clear();
+			}
 			if ((enteredInterior || interiorEntrancePending ||
 					(interiorEntranceTile == null)) && primaryInterior &&
 					(mv != null) && (ui != null) && (ui.sess != null)) {
@@ -1184,8 +1289,10 @@ public class MiniMap extends Widget {
 			} else if (!primaryInterior) {
 				interiorEntranceTile = null;
 				interiorEntrancePending = false;
+				recordedCaveEntranceTile = null;
 			}
 		}
+		captureRecordedCaveTiles();
 		/* Record exterior context continuously while it is actually confirmed by
 		 * the persistent atlas. When cave tiles are present this is skipped, so
 		 * entering an interior freezes the last trustworthy exterior position. */
@@ -1257,6 +1364,33 @@ public class MiniMap extends Widget {
 		drawMapOverlay(g, tc, hsz);
 		g.gl.glPopMatrix();
 		super.draw(og);
+	}
+
+	/**
+	 * Persists cave rasters as offsets from the pair of positions observed at a
+	 * verified surface-to-cave transition. This intentionally does nothing for
+	 * direct cave logins and interior-to-interior transitions: neither has a
+	 * trustworthy exterior anchor.
+	 */
+	private void captureRecordedCaveTiles() {
+		if (!primary || !Config.autoSaveMinimaps || !primaryInterior)
+			return;
+		Coord entrance = recordedCaveEntranceTile;
+		Coord interior = interiorEntranceTile();
+		if ((entrance == null) || (interior == null))
+			return;
+		synchronized (caveTex) {
+			for (Map.Entry<Coord, Tex> entry : caveTex.entrySet()) {
+				if (!(entry.getValue() instanceof TexI)) continue;
+				Coord offset = entry.getKey().mul(cmaps).sub(interior);
+				String key = entrance.x + ":" + entrance.y + ":" + offset.x + ":" + offset.y;
+				if (!recordedCaveTiles.add(key)) continue;
+				if (!recordedCaves.queueSave(entrance, offset,
+						((TexI) entry.getValue()).back)) {
+					recordedCaveTiles.remove(key);
+				}
+			}
+		}
 	}
 
 	protected void drawMapOverlay(GOut g, Coord tc, Coord hsz) {

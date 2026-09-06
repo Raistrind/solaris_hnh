@@ -97,18 +97,7 @@ public final class LegacyFuelGuide {
 	 * metadata, so this deliberately covers only unambiguous Legacy names.
 	 */
 	public static String forIngredient(String itemName, String resourceName) {
-		String item = key(itemName);
-		String resource = key(resourceName);
-		String recipe = "";
-		if ((item.contains("honeybun") && item.contains("dough"))
-				|| (resource.contains("honeybun") && resource.contains("dough")))
-			recipe = "Honey Bun";
-		else if ((item.contains("carrotcake") && item.contains("dough"))
-				|| (resource.contains("carrotcake") && resource.contains("dough")))
-			recipe = "Carrot Cake";
-		else if ((item.contains("blueberrypie") && item.contains("dough"))
-				|| (resource.contains("blueberrypie") && resource.contains("dough")))
-			recipe = "Blueberry Pie";
+		String recipe = recipeForIngredient(itemName, resourceName);
 		if (recipe.length() == 0)
 			return "";
 		String fuel = forRecipe(recipe);
@@ -117,18 +106,36 @@ public final class LegacyFuelGuide {
 
 	/** Returns the documented branch requirement for a directly recognized ingredient, or -1. */
 	public static int branchFuelForIngredient(String itemName, String resourceName) {
+		String recipe = recipeForIngredient(itemName, resourceName);
+		return (recipe.length() == 0) ? -1 : branchFuelForRecipe(recipe);
+	}
+
+	/**
+	 * Maps dough and unbaked input names to their final Legacy recipe.  Item
+	 * tooltips use several naming conventions ("Bark Bread Dough", resource
+	 * names, and "Unbaked Pumpkin Bread"), while the fuel table is keyed by the
+	 * final recipe name.
+	 */
+	private static String recipeForIngredient(String itemName, String resourceName) {
 		String item = key(itemName);
 		String resource = key(resourceName);
-		if ((item.contains("honeybun") && item.contains("dough"))
-				|| (resource.contains("honeybun") && resource.contains("dough")))
-			return branchFuelForRecipe("Honey Bun");
-		if ((item.contains("carrotcake") && item.contains("dough"))
-				|| (resource.contains("carrotcake") && resource.contains("dough")))
-			return branchFuelForRecipe("Carrot Cake");
-		if ((item.contains("blueberrypie") && item.contains("dough"))
-				|| (resource.contains("blueberrypie") && resource.contains("dough")))
-			return branchFuelForRecipe("Blueberry Pie");
-		return -1;
+		String combined = item + " " + resource;
+		if (combined.contains("honeybun") && combined.contains("dough"))
+			return "Honey Bun";
+		if (combined.contains("carrotcake") && combined.contains("dough"))
+			return "Carrot Cake";
+		if (combined.contains("blueberrypie") && combined.contains("dough"))
+			return "Blueberry Pie";
+		if (combined.contains("barkbread") && combined.contains("dough"))
+			return "Bark Bread";
+		if (combined.contains("ringofbrodgar") && combined.contains("dough"))
+			return "Ring of Brodgar (Baking)";
+		if (combined.contains("unbakedpumpkinbread")
+				|| (combined.contains("pumpkinbread") && combined.contains("dough")))
+			return "Pumpkin Bread";
+		if (combined.contains("bread") && combined.contains("dough"))
+			return "Bread";
+		return "";
 	}
 
 	/** General, non-recipe-specific fuel reference for places where it is useful. */

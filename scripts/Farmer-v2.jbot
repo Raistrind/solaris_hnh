@@ -1,0 +1,1212 @@
+//#! name = Area Farmer 2
+//#! uniq = area_farmer_v2_storage_first
+//#! icon = gfx/invobjs/carrot
+
+/*
+ * Area Farmer 2.0.0 -- Legacy Haven & Hearth, Solaris/Union scripting API.
+ * Standalone: no includes, client patches, reflection or external services.
+ * See README.md and IMPLEMENTATION-REPORT.md before an unattended run.
+ *
+ * Units: world tiles are 11 map units; inventory coordinates are grid cells.
+ * Crop stages below are raw blob(0) values, NOT the displayed stage number.
+ * Harvest-output limits are conservative, EDITABLE planning assumptions,
+ * not server guarantees. A modified server/client can have different yields.
+ *
+ * Item ownership: only additions observed during a confirmed harvest become
+ * disposable/storeable. Initial stock and ambiguous identities are protected.
+ * No auto-eating, drinking, processing, digging, plowing or ground-item pickup.
+ * Pause/Stop are cooperative; an already-issued action can finish first.
+ */
+var AF_VERSION = "2.0.0";
+var AF_GLOBAL = this;
+var AF_CFG = {
+    tile: 11, plowed: 9, poll: 75,
+    ioMs: 6000, actionMs: 20000, moveMs: 20000, cursorMs: 4000,
+    settleMs: 700, lateTakeMs: 3000,
+    maxFieldTiles: 1600, maxInitialDistance: 440,
+    spareCells: 1, minStamina: 25,
+    bagCaption: "Seedbag", inventoryCaption: "Inventory"
+};
+
+function afNow() { return new Date().getTime(); }
+function afError(code, text) { var e = new Error(text); e.afCode = code; return e; }
+function afFail(code, text) { throw afError(code, text); }
+function afLog(text) { jToConsole("FARMER 2: " + text); }
+function afHas(name) { return typeof AF_GLOBAL[name] == "function"; }
+function afAlive(obj) { try { return obj != null && obj.isActual(); } catch (e) { return false; } }
+function afCopyCoord(p) { return jCoord(Number(p.x), Number(p.y)); }
+function afDistance(a, b) { var x = a.x - b.x, y = a.y - b.y; return Math.sqrt(x*x + y*y); }
+function afTileKey(p) { return Math.floor(p.x / 11) + "," + Math.floor(p.y / 11); }
+function afSlotKey(p) { return Number(p.x) + "," + Number(p.y); }
+function afCenter(p) { return jCoord(Math.floor(p.x/11)*11 + 5, Math.floor(p.y/11)*11 + 5); }
+function afSamePos(a, b) { return a.x == b.x && a.y == b.y; }
+function afContains(a, v) { for (var i=0; i<a.length; i++) if (a[i] == v) return true; return false; }
+function afInt(text, lo, hi, label) {
+    text = String(text);
+    if (!/^\d+$/.test(text)) afFail("SETTING", label + " must be a whole number.");
+    var n = Number(text);
+    if (n < lo || n > hi) afFail("SETTING", label + " must be between " + lo + " and " + hi + ".");
+    return n;
+}
+function afArray(javaArray) {
+    var a = []; if (javaArray == null) return a;
+    for (var i=0; i<javaArray.length; i++) a.push(javaArray[i]);
+    return a;
+}
+// Every accepted planting resource can be tried in a bag when its footprint fits.
+// A verified rejection keeps it in ordinary inventory; no server acceptance is assumed.
+function afCrop(label, name, seeds, stages, limit, harvestable, supplied) {
+    return {label:label, name:"gfx/terobjs/"+name, seeds:seeds, stages:stages,
+        outputLimit:limit, pack:seeds.slice(0), harvestable:harvestable !== false,
+        supplied: supplied === true};
+}
+function afProfiles() {
+    var p = "gfx/invobjs/";
+    return [
+        afCrop("Carrot", "plants/carrot", [p+"carrot",p+"seed-carrot"], [4], 3),
+        afCrop("Poppy", "plants/poppy", [p+"seed-poppy"], [4], 6),
+        afCrop("Wheat", "plants/wheat", [p+"seed-wheat",p+"wheat"], [3], 6),
+        afCrop("Hemp", "plants/hemp", [p+"seed-hemp"], [4], 6),
+        afCrop("Beetroot", "plants/beetroot", [p+"beetroot"], [3], 6),
+        afCrop("Grapes", "plants/wine", [p+"seed-grape"], [3], 3, true, true),
+        afCrop("Tea", "plants/tea", [p+"seed-tea"], [3], 6),
+        afCrop("Flax", "plants/flax", [p+"flaxseed"], [3], 6),
+        afCrop("Peppercorn", "plants/pepper", [p+"seed-pepper"], [3], 6),
+        afCrop("Hops", "plants/hops", [p+"seed-hops"], [3], 3),
+        afCrop("Peas", "plants/peas", [p+"peapod"], [4], 3),
+        afCrop("Onions", "plants/onion", [p+"onion"], [3], 3),
+        afCrop("Tobacco", "plants/tobacco", [p+"seed-tobacco"], [3], 6),
+        afCrop("Pumpkin", "plants/pumpkin", [p+"seed-pumpkin"], [6], 1, false, true)
+    ];
+}
+function afPlantable(profile, item) { return afContains(profile.seeds, item.res); }
+function afIsBag(item) { return item.res.indexOf("gfx/invobjs/bag-seed") === 0; }
+function afQualityHigh(a,b) {
+    if (a.q === null && b.q !== null) return 1;
+    if (b.q === null && a.q !== null) return -1;
+    if (a.q !== b.q) return b.q - a.q;
+    return a.key < b.key ? -1 : (a.key > b.key ? 1 : 0);
+}
+function afQualityLow(a,b) {
+    if (a.q === null && b.q !== null) return 1;
+    if (b.q === null && a.q !== null) return -1;
+    if (a.q !== b.q) return a.q - b.q;
+    return a.key < b.key ? -1 : (a.key > b.key ? 1 : 0);
+}
+function afSeedList(items, profile) {
+    var a=[]; for(var i=0;i<items.length;i++) if(afPlantable(profile,items[i])) a.push(items[i]);
+    a.sort(afQualityHigh); return a;
+}
+function afReserveMap(seeds, count) {
+    var map={}; for(var i=0;i<Math.min(count,seeds.length);i++) map[seeds[i].key]=true;
+    return map;
+}
+/* Pure policy: half of run-acquired planting ITEMS, never split/guess stacks. */
+function afCullPlan(items, profile, reserve) {
+    var seeds=afSeedList(items,profile), keep=afReserveMap(seeds,reserve);
+    var owned=[], eligible=[], other=[], i;
+    for(i=0;i<seeds.length;i++) {
+        if(seeds[i].owned) owned.push(seeds[i]);
+        if(seeds[i].owned && seeds[i].q !== null && seeds[i].number <= 1 && !keep[seeds[i].key])
+            eligible.push(seeds[i]);
+    }
+    eligible.sort(afQualityLow);
+    var wanted=Math.floor(owned.length/2);
+    if(eligible.length>wanted) eligible=eligible.slice(0,wanted);
+    for(i=0;i<items.length;i++)
+        if(items[i].owned && !afPlantable(profile,items[i]) && !afIsBag(items[i])) other.push(items[i]);
+    return {seeds:eligible, other:other, requested:wanted, retained:seeds.length-eligible.length};
+}
+function afStorePlan(items, profile, reserve, withByproducts) {
+    var seeds=afSeedList(items,profile), keep=afReserveMap(seeds,reserve), a=[], i;
+    for(i=0;i<seeds.length;i++) if(seeds[i].owned && !keep[seeds[i].key]) a.push(seeds[i]);
+    if(withByproducts) for(i=0;i<items.length;i++)
+        if(items[i].owned && !afPlantable(profile,items[i]) && !afIsBag(items[i])) a.push(items[i]);
+    return a;
+}
+
+/* -------------------------- UI and control -------------------------- */
+function afDestroyUI(ui) {
+    if(!ui) return;
+    for(var i=ui.children.length-1;i>=0;i--) try{ui.children[i].destroy();}catch(e){}
+    try{ui.win.destroy();}catch(e2){}
+}
+function afUI(title, width, height) {
+    var w=jGUIWindow(jCoord(260,160),jCoord(width,height),title);
+    w.toggleCloseButton(); // An explicit Cancel/Stop button is always present.
+    return {win:w,children:[]};
+}
+function afLabel(ui,x,y,text) { var v=jGUILabel(ui.win,jCoord(x,y),text);ui.children.push(v);return v; }
+function afButton(ui,x,y,width,text) {var v=jGUIButton(ui.win,jCoord(x,y),width,text);ui.children.push(v);return v;}
+function afEntry(ui,x,y,width,text) {var v=jGUIEntry(ui.win,jCoord(x,y),jCoord(width,22),String(text));ui.children.push(v);return v;}
+function afBox(ui,x,y,text,checked) {var v=jGUICbox(ui.win,jCoord(x,y),text);v.setChecked(checked);ui.children.push(v);return v;}
+function afWrapLines(lines,width) {
+    var out=[];
+    for(var i=0;i<lines.length;i++) {
+        var text=String(lines[i]);
+        while(text.length>width) {
+            var at=text.lastIndexOf(" ",width);if(at<Math.floor(width/2))at=width;
+            out.push(text.substring(0,at));text=text.substring(at).replace(/^\s+/,"");
+        }
+        out.push(text);
+    }
+    return out;
+}
+function afMenu(title,lines,choices) {
+    lines=afWrapLines(lines,82);
+    var rows=Math.ceil(choices.length/2), base=lines.length*21+12;
+    var ui=afUI(title,640,base+rows*29+12);
+    try{
+        for(var i=0;i<lines.length;i++) afLabel(ui,8,8+i*21,lines[i]);
+        for(i=0;i<choices.length;i++) afButton(ui,8+(i%2)*314,base+Math.floor(i/2)*29,306,choices[i]);
+        var b=String(ui.win.waitButtonClick(300000));
+        if(!b || b=="Cancel" || b=="Exit") return null;
+        return b;
+    } finally {afDestroyUI(ui);}
+}
+function afSetStatus(job,text) {
+    job.status=text;
+    if(job.panel) {
+        job.panel.status.setText(text.length>85 ? text.substring(0,82)+"..." : text);
+        job.panel.count.setText("Harvested " +job.stats.harvested+" | Planted "+job.stats.planted+
+            " | Dropped "+job.stats.dropped+" | Stored "+job.stats.stored);
+        job.panel.pending.setText("To harvest "+(afRows(job,"harvest").length+afRows(job,"harvest-pending").length)+
+            " | Replants owed "+afRows(job,"replant").length+" | Gaps "+afRows(job,"gap").length);
+    }
+}
+function afPanel(job) {
+    var ui=afUI("Area Farmer 2 - " + job.profile.label,640,156);
+    ui.status=afLabel(ui,8,8,"Ready");
+    ui.count=afLabel(ui,8,31,"");ui.pending=afLabel(ui,8,54,"");
+    afLabel(ui,8,77,"Pause/Stop finish the current item action first. Do not move items while running.");
+    afButton(ui,8,107,112,"Pause");afButton(ui,128,107,112,"Resume");
+    afButton(ui,248,107,112,"Plant now");afButton(ui,368,107,112,"Diagnostics");
+    afButton(ui,488,107,138,"Stop");
+    job.panel=ui;afSetStatus(job,"Ready");
+}
+function afPoll(job) {
+    if(!job || !job.panel) return;
+    if(!afAlive(job.panel.win)) {job.stop=true;return;}
+    var b=String(job.panel.win.waitButtonClick(1)); // NEVER 0: 0 means infinite.
+    if(b=="Stop") job.stop=true;
+    else if(b=="Pause") job.pause=true;
+    else if(b=="Resume") job.resume=true;
+    else if(b=="Plant now") job.plantNow=true;
+    else if(b=="Diagnostics") afDiagnostics(job);
+}
+function afWait(job,predicate,ms) {
+    var end=afNow()+ms;
+    do {
+        if(predicate()) return true;
+        afPoll(job);
+        if(afNow()>=end) break;
+        if(jSleep(Math.min(AF_CFG.poll,Math.max(1,end-afNow())))===false) {
+            if(job) job.stop=true; break;
+        }
+    }while(afNow()<=end);
+    return predicate();
+}
+function afStopMotion(job) {
+    /* Replacing the native route clears its old waypoint list in public Solaris.
+     * Still only best-effort on a private fork; a manual map click is the fallback. */
+    try {
+        if(jIsDragging()) return;
+        if(afHas("jPFMove")) jPFMove(afCenter(jMyCoords()));
+        jAbsClick(jMyCoords(),3,0);
+    } catch(e) {afLog("Could not cancel movement automatically; click the map to stop it.");}
+}
+function afCheckpoint(job) {
+    afPoll(job);
+    if(job.stop) afFail("CANCELLED","Stopped by you.");
+    if(job.pause) afAttention(job,"PAUSED","Paused by you. Resume rescans live sources and targets.");
+    if(job.stop) afFail("CANCELLED","Stopped by you.");
+    if(afHas("jHaveAggro") && jHaveAggro()) afFail("AGGRO","Combat detected. Stop the farmer and take control.");
+}
+function afActionBoundary(job) {
+    // Unlike afCheckpoint, this never resumes inside a partially prepared action.
+    // The main loop recovers the cursor and restarts from fresh observations.
+    afPoll(job);
+    if(job.stop)afFail("CANCELLED","Stopped before the next game action.");
+    if(job.pause)afFail("PAUSED","Paused before the next game action.");
+    if(afHas("jHaveAggro") && jHaveAggro())afFail("AGGRO","Combat detected. Take control before continuing.");
+}
+function afAttention(job,code,text) {
+    afLog(code+": "+text);
+    if(job.hand && !afRecover(job)) afLog("An item remains on the cursor. Return it manually before Resume.");
+    afStopMotion(job);
+    if(!job.panel) afFail(code,text);
+    job.pause=true;job.resume=false;
+    afSetStatus(job,"PAUSED - "+code+" (details in Messages)");
+    while(!job.stop) {
+        afPoll(job);
+        if(job.resume) {
+            job.resume=false;
+            if(jIsDragging()) {afLog("Put the held item away before Resume.");continue;}
+            job.hand=null;job.pause=false;job.clearRejects=true;
+            // Refreshing preserves only identities that are still verifiable.
+            afSetStatus(job,"Rescanning after pause...");
+            return;
+        }
+        if(jSleep(100)===false){job.stop=true;break;}
+    }
+    afFail("CANCELLED","Stopped by you.");
+}
+
+/* ---------------------- inventory and provenance -------------------- */
+function afSource(id,kind,inv,win) {return {id:id,kind:kind,inv:inv,win:win,track:{},reject:{}};}
+function afSourceLive(src) {return src && afAlive(src.inv) && (!src.win || afAlive(src.win));}
+function afItemSnapshot(item,src) {
+    if(!afAlive(item)) return null;
+    try {
+        var r=String(item.resName()), q=Number(item.quality()), c=item.coord(), size=item.size();
+        if(!r || r.indexOf("missing")>=0) afFail("RESOURCE_LOADING","An item resource is not loaded yet.");
+        var num=typeof item.stage=="function" ? Number(item.stage()) : -1;
+        if(!isFinite(num)) num=-1;
+        if(!isFinite(q) || q<0) q=null;
+        var w=Number(size.x),h=Number(size.y);
+        if(w<1||h<1||w>100||h>100) afFail("ITEM_SIZE","Invalid item dimensions for "+r);
+        var slot=afCopyCoord(c), k=afSlotKey(slot);
+        return {ref:item,source:src,slot:slot,key:src.id+":"+k,res:r,q:q,w:w,h:h,number:num,
+            sig:r+"|"+q+"|"+w+"x"+h+"|"+num,owned:false};
+    } catch(e) {if(!afAlive(item)) return null;throw e;}
+}
+function afTrackMatches(old,item) {
+    if(!old || old.sig!=item.sig || !afAlive(old.ref)) return false;
+    try{return afSamePos(old.ref.coord(),item.slot) && String(old.ref.resName())==item.res;}catch(e){return false;}
+}
+function afRead(src) {
+    if(!afSourceLive(src)) afFail("SOURCE_CLOSED","The "+src.id+" inventory closed. Resume will reopen carried sources.");
+    var a=afArray(src.inv.getItems("")), out=[], next={}, old=src.track||{}, i,k,v,previous;
+    for(i=0;i<a.length;i++) {
+        v=afItemSnapshot(a[i],src);if(!v) continue;
+        k=afSlotKey(v.slot);previous=old[k];
+        if(!afTrackMatches(previous,v)) {
+            previous=null;
+            for(var oldKey in old) if(afTrackMatches(old[oldKey],v)) {previous=old[oldKey];break;}
+        }
+        v.owned=previous ? previous.owned===true : false;
+        next[k]={ref:v.ref,sig:v.sig,owned:v.owned};out.push(v);
+    }
+    src.track=next;return out;
+}
+function afOwn(item,value) {
+    var k=afSlotKey(item.slot);
+    item.owned=value;
+    item.source.track[k]={ref:item.ref,sig:item.sig,owned:value};
+}
+function afAt(src,slot) {var a=afRead(src);for(var i=0;i<a.length;i++) if(afSamePos(a[i].slot,slot)) return a[i];return null;}
+function afCarriedSources(job) {return [job.player].concat(job.bags);}
+function afCapture(job) {
+    var sources=afCarriedSources(job), items=[],map={},signature=[], i,j,a;
+    for(i=0;i<sources.length;i++) {
+        a=afRead(sources[i]);
+        for(j=0;j<a.length;j++) {items.push(a[j]);map[a[j].key]=a[j];signature.push(a[j].key+"="+a[j].sig);}
+    }
+    signature.sort();return {items:items,map:map,signature:signature.join(";")};
+}
+function afHarvestDelta(before,after) {
+    var added=[],changed=false,cells=0,maxW=1,maxH=1;
+    for(var i=0;i<after.items.length;i++) {
+        var a=after.items[i], b=before.map[a.key];
+        if(!b) {added.push(a);changed=true;cells+=a.w*a.h;maxW=Math.max(maxW,a.w);maxH=Math.max(maxH,a.h);}
+        else if(a.sig!=b.sig) changed=true;
+    }
+    return {added:added,changed:changed,cells:cells,maxW:maxW,maxH:maxH};
+}
+function afGrid(src) {
+    var a=afRead(src),size=src.inv.size(),w=Number(size.x),h=Number(size.y),cells=[],i,x,y;
+    if(w<1||h<1||w*h>10000) afFail("INVENTORY_SIZE","Invalid inventory dimensions in "+src.id);
+    for(i=0;i<w*h;i++) cells[i]=false;
+    for(i=0;i<a.length;i++) {
+        for(y=a[i].slot.y;y<a[i].slot.y+a[i].h;y++) for(x=a[i].slot.x;x<a[i].slot.x+a[i].w;x++) {
+            if(x<0||y<0||x>=w||y>=h) afFail("INVENTORY_LAYOUT","An item extends outside "+src.id+".");
+            if(cells[y*w+x]) afFail("INVENTORY_LAYOUT","Overlapping inventory items; wait for the client to settle.");
+            cells[y*w+x]=true;
+        }
+    }
+    var free=0;for(i=0;i<cells.length;i++) if(!cells[i]) free++;
+    return {w:w,h:h,cells:cells,free:free};
+}
+function afFitsAt(grid,x,y,w,h) {
+    if(x<0||y<0||x+w>grid.w||y+h>grid.h) return false;
+    for(var yy=y;yy<y+h;yy++) for(var xx=x;xx<x+w;xx++) if(grid.cells[yy*grid.w+xx]) return false;
+    return true;
+}
+function afFindSlot(grid,w,h,preferred) {
+    if(preferred && afFitsAt(grid,preferred.x,preferred.y,w,h)) return afCopyCoord(preferred);
+    // Includes the bottom and right edges, unlike the reference helper's > check.
+    for(var y=0;y<=grid.h-h;y++) for(var x=0;x<=grid.w-w;x++)
+        if(afFitsAt(grid,x,y,w,h)) return jCoord(x,y);
+    return null;
+}
+function afMarkGrid(grid,slot,w,h) {
+    for(var y=slot.y;y<slot.y+h;y++) for(var x=slot.x;x<slot.x+w;x++) grid.cells[y*grid.w+x]=true;
+    grid.free-=w*h;
+}
+function afCapacity(job) {
+    var grid=afGrid(job.player), w=job.outputW,h=job.outputH,n=job.outputLimit;
+    if(grid.free<n*w*h+job.spareCells) return false;
+    for(var i=0;i<n;i++) {var c=afFindSlot(grid,w,h,null);if(!c)return false;afMarkGrid(grid,c,w,h);}
+    return grid.free>=job.spareCells;
+}
+function afFirstInventory(wnd) {
+    if(!afAlive(wnd)) return null;
+    var a=wnd.getInventories();return a && a.length==1 && afAlive(a[0]) ? a[0] : null;
+}
+function afEnsurePlayer(job) {
+    if(afSourceLive(job.player)) return;
+    var w=jGetWindow(AF_CFG.inventoryCaption);
+    if(!afAlive(w)) {jToggleInventory();}
+    var inv=null;
+    if(!afWait(job,function(){w=jGetWindow(AF_CFG.inventoryCaption);inv=afFirstInventory(w);return inv!=null;},AF_CFG.ioMs))
+        afFail("INVENTORY_CLOSED","Open the player Inventory, then Resume.");
+    job.player=afSource("player","player",inv,w);
+    afRead(job.player); // Newly visible identities default to protected.
+}
+function afCloseWindows(job,caption) {
+    var a=afArray(jGetWindows(caption));
+    for(var i=0;i<a.length;i++) if(afAlive(a[i])) a[i].close();
+    if(!afWait(job,function(){return jGetWindows(caption).length==0;},AF_CFG.ioMs))
+        afFail("WINDOW_CLOSE","Close the "+caption+" windows manually, then Resume.");
+}
+function afNewWindow(job,caption) {
+    var end=afNow()+AF_CFG.ioMs,w=null;
+    do {w=jWaitNewWindow(caption,50);if(w && afAlive(w)) return w;afPoll(job);}while(afNow()<end&&!job.stop);
+    afFail("WINDOW_OPEN","No new '"+caption+"' window appeared. Check its exact title and try Resume.");
+}
+function afBindBag(job,bag,kind,serial) {
+    afCheckpoint(job);
+    jDropLastWindow();bag.ref.iact();
+    var w=afNewWindow(job,AF_CFG.bagCaption),inv=null;
+    if(!afWait(job,function(){inv=afFirstInventory(w);return inv!=null;},AF_CFG.ioMs))
+        afFail("BAG_INVENTORY","The opened seedbag has no single usable inventory.");
+    var src=afSource(serial,kind,inv,w);src.bag=bag.ref;src.parent=bag.source;
+    afRead(src);return src;
+}
+function afEnsureBags(job,initial) {
+    if(!job.useBags) {job.bags=[];return;}
+    if(initial || job.resetBags) {
+        afCloseWindows(job,AF_CFG.bagCaption);
+        job.bags=[];job.resetBags=false;
+    }
+    var items=afRead(job.player),next=[],old=job.bags,i,j,known;
+    for(i=0;i<items.length;i++) {
+        if(!afIsBag(items[i])) continue;
+        known=null;
+        for(j=0;j<old.length;j++) {
+            try{if(afAlive(old[j].bag)&&afSamePos(old[j].bag.coord(),items[i].slot)) {known=old[j];break;}}catch(e){}
+        }
+        if(known && afSourceLive(known)) {next.push(known);continue;}
+        try {next.push(afBindBag(job,items[i],"bag","carried-bag-"+(++job.sourceSerial)));}
+        catch(e2) {job.resetBags=true;throw e2;}
+    }
+    job.bags=next;
+}
+function afEnsureSources(job) {
+    afEnsurePlayer(job);afEnsureBags(job,false);
+    if(job.clearRejects) {
+        var all=afCarriedSources(job);
+        if(job.depot) {if(job.depot.source)all.push(job.depot.source);all=all.concat(job.depot.bags||[]);}
+        for(var i=0;i<all.length;i++)all[i].reject={};
+        job.clearRejects=false;
+    }
+}
+
+/* -------------------- explicit, verified item actions ---------------- */
+function afHeldMatches(hand) {
+    if(!hand || !jIsDragging()) return false;
+    var item=jGetDraggingItem();if(!afAlive(item)) return false;
+    try {
+        var q=Number(item.quality()),size=item.size();
+        return String(item.resName())==hand.res && (hand.q===null || q==hand.q) && size.x==hand.w && size.y==hand.h;
+    }catch(e){return false;}
+}
+function afTake(job,item) {
+    afCheckpoint(job);
+    if(jIsDragging()) afFail("HAND_OCCUPIED","Put the held item away. The farmer will not drop it.");
+    var fresh=afAt(item.source,item.slot);
+    if(!fresh || fresh.sig!=item.sig || !afAlive(item.ref)) afFail("STALE_ITEM","The selected item changed; Resume to rescan.");
+    job.hand={source:fresh.source,slot:fresh.slot,res:fresh.res,q:fresh.q,w:fresh.w,h:fresh.h,
+        sig:fresh.sig,number:fresh.number,owned:fresh.owned,confirmed:false};
+    fresh.ref.take();
+    var taken=afWait(job,function(){
+        if(!afHeldMatches(job.hand)) return false;
+        return afAt(fresh.source,fresh.slot)==null;
+    },AF_CFG.ioMs);
+    if(!taken) afFail("TAKE_UNCONFIRMED","Taking "+fresh.res+" was not confirmed. Inspect the cursor before Resume.");
+    job.hand.confirmed=true;
+}
+function afPutHeld(job,dest,slot,ms) {
+    var hand=job.hand;
+    if(!hand || !afHeldMatches(hand)) afFail("WRONG_HELD_ITEM","The held item is not the item selected by this job.");
+    if(!afFitsAt(afGrid(dest),slot.x,slot.y,hand.w,hand.h)) return false;
+    dest.inv.drop(slot);
+    var placed=null;
+    var ok=afWait(job,function(){
+        if(jIsDragging() || !afSourceLive(dest)) return false;
+        placed=afAt(dest,slot);
+        return placed && placed.res==hand.res && (hand.q===null || placed.q==hand.q) && placed.w==hand.w && placed.h==hand.h;
+    },ms);
+    if(ok) {afOwn(placed,hand.owned);job.hand=null;return true;}
+    if(!jIsDragging()) afFail("TRANSFER_UNCONFIRMED","The cursor cleared but the destination item was not verified. Inspect both inventories.");
+    return false;
+}
+function afRecover(job) {
+    if(!job.hand) return !jIsDragging();
+    if(!jIsDragging() && !job.hand.confirmed) afWait(job,function(){return jIsDragging();},AF_CFG.lateTakeMs);
+    if(!jIsDragging()) {job.hand=null;return true;}
+    if(!afHeldMatches(job.hand)) return false; // Never relocate an unexpected object.
+    var sources=[job.hand.source], carried=afCarriedSources(job),i,j,seen=false;
+    for(i=0;i<carried.length;i++) {
+        seen=false;for(j=0;j<sources.length;j++) if(sources[j]===carried[i]) seen=true;
+        if(!seen) sources.push(carried[i]);
+    }
+    var deadline=afNow()+AF_CFG.ioMs;
+    for(i=0;i<sources.length && afNow()<deadline;i++) {
+        if(!afSourceLive(sources[i])) continue;
+        // Other bags are attempted only for profile-declared bag-compatible seeds.
+        if(sources[i]!==job.hand.source && sources[i].kind=="bag" && !afContains(job.profile.pack,job.hand.res)) continue;
+        try{
+            var slot=afFindSlot(afGrid(sources[i]),job.hand.w,job.hand.h,i==0?job.hand.slot:null);
+            if(slot && afPutHeld(job,sources[i],slot,Math.min(2000,Math.max(1,deadline-afNow())))) return true;
+        }catch(e){if(!jIsDragging())return false;}
+    }
+    return false;
+}
+function afMoveItem(job,item,dest) {
+    afCheckpoint(job);
+    var slot=afFindSlot(afGrid(dest),item.w,item.h,null);if(!slot)return false;
+    afTake(job,item);
+    if(afPutHeld(job,dest,slot,AF_CFG.ioMs)) {job.stats.transferred++;return true;}
+    if(!afRecover(job)) afFail("RECOVERY_FAILED","The item remains held. Place it in an inventory before Resume.");
+    return false;
+}
+function afPackBags(job) {
+    if(!job.useBags || job.bags.length==0) return;
+    var a=afRead(job.player);a.sort(afQualityHigh);
+    for(var i=0;i<a.length;i++) {
+        if(!afContains(job.profile.pack,a[i].res))continue;
+        for(var j=0;j<job.bags.length;j++) {
+            var bag=job.bags[j];
+            if(bag.reject[a[i].res] || !afFindSlot(afGrid(bag),a[i].w,a[i].h,null)) continue;
+            if(afMoveItem(job,a[i],bag)) break;
+            bag.reject[a[i].res]=true;
+            afLog("Seedbag placement unconfirmed/rejected for "+a[i].res+"; retaining it in ordinary inventory.");
+            break; // The recovered item has a new wrapper; refresh it on the next pack pass.
+        }
+    }
+}
+
+/* ------------------------ world and movement ------------------------ */
+function afWorld() {
+    /* The reference radius implementation is in tiles despite a points comment.
+     * A deliberately broad radius plus our own absolute filtering handles both. */
+    var raw=jGetObjects(10000,jCoord(0,0),[""]), out=[],seen={};
+    for(var i=0;i<raw.length;i++) {
+        if(!afAlive(raw[i]))continue;
+        try {
+            var id=Number(raw[i].getID());if(seen[id])continue;
+            var p=afCopyCoord(raw[i].position()),name=String(raw[i].name());
+            if(!name) afFail("WORLD_LOADING","A nearby object resource is still loading.");
+            var stage=name.indexOf("/plants/")>=0 ? Number(raw[i].blob(0)) : -1;
+            out.push({id:id,pos:p,name:name,stage:stage,key:afTileKey(p)});seen[id]=true;
+        }catch(e){if(afAlive(raw[i]))throw e;}
+    }
+    return out;
+}
+function afInArea(pos,area) {
+    var x=Math.floor(pos.x/11),y=Math.floor(pos.y/11),ox=Math.floor(area.origin.x/11),oy=Math.floor(area.origin.y/11);
+    return x>=ox&&y>=oy&&x<ox+area.w&&y<oy+area.h;
+}
+function afOccupants(world,pos) {
+    var a=[],key=afTileKey(pos),my=Number(jGetMyID());
+    for(var i=0;i<world.length;i++) {
+        var o=world[i];
+        if(o.key!=key || o.id==my)continue;
+        if(o.name.indexOf("gfx/terobjs/items/")===0)continue; // Loose ground items do not occupy planting soil.
+        a.push(o);
+    }
+    return a;
+}
+function afTileState(job,row) {
+    var type=Number(jAbsTileType(jCoord(Math.floor(row.pos.x/11),Math.floor(row.pos.y/11))));
+    if(type<0) afFail("TILE_UNLOADED","Tile "+row.key+" is not loaded. Return to the field, then Resume.");
+    var occ=afOccupants(afWorld(),row.pos);
+    return {type:type,occupants:occ};
+}
+function afClearCursor(job) {
+    if(jIsDragging()) afFail("HAND_OCCUPIED","Return the held item to an inventory first.");
+    if(jIsCursor("arw"))return;
+    jAbsClick(jMyCoords(),3,0);
+    if(!afWait(job,function(){return jIsCursor("arw");},AF_CFG.cursorMs))
+        afFail("CURSOR","The normal cursor did not return. Cancel the current action, then Resume.");
+}
+function afWalk(job,pos,tolerance) {
+    afCheckpoint(job);afClearCursor(job);
+    var deadline=afNow()+AF_CFG.moveMs,last=afCopyCoord(jMyCoords()),lastProgress=afNow(),attempts=0;
+    if(afDistance(last,pos)<=tolerance && !jIsMoving())return;
+    function issue() {
+        attempts++;
+        if(jIsPathFree(pos)) jAbsClick(pos,1,0);
+        else if(afHas("jPFMove")) jPFMove(pos);
+        else afFail("PATH_BLOCKED","No direct path. Clear the route or move closer, then Resume.");
+        lastProgress=afNow();
+    }
+    issue();
+    while(afNow()<deadline) {
+        afPoll(job);
+        if(job.stop || job.pause) {afStopMotion(job);afFail(job.stop?"CANCELLED":"PAUSED","Movement interrupted by you.");}
+        var current=afCopyCoord(jMyCoords());
+        if(afDistance(current,pos)<=tolerance && !jIsMoving())return;
+        if(afDistance(current,last)>1){last=current;lastProgress=afNow();}
+        if(afNow()-lastProgress>4000 && attempts<2)issue();
+        if(jSleep(AF_CFG.poll)===false){job.stop=true;break;}
+    }
+    afStopMotion(job);
+    if(job.stop)afFail("CANCELLED","Movement interrupted.");
+    afFail("MOVE_FAILED","Could not reach "+afTileKey(pos)+". Clear the path or move closer, then Resume.");
+}
+function afApproach(job,pos) {
+    if(afDistance(jMyCoords(),pos)<=16&&!jIsMoving())return;
+    var offsets=[[0,0],[-11,0],[11,0],[0,-11],[0,11],[-22,0],[22,0],[0,-22],[0,22]],a=[];
+    for(var i=0;i<offsets.length;i++) {
+        var p=jCoord(pos.x+offsets[i][0],pos.y+offsets[i][1]);
+        if(jIsPathFree(p))a.push({pos:p,d:afDistance(jMyCoords(),p)});
+    }
+    a.sort(function(x,y){return x.d-y.d;});
+    afWalk(job,a.length?a[0].pos:afCenter(pos),2);
+}
+function afRows(job,state) {
+    var a=[];if(!job.rows)return a;
+    for(var i=0;i<job.rows.length;i++)if(job.rows[i].state==state)a.push(job.rows[i]);
+    return a;
+}
+function afBuildRows(job,world) {
+    var rows=[],by={},area=job.area,x,y,pos,key,occ,profile=job.profile,mature=0,gaps=0,ignored=0;
+    for(y=0;y<area.h;y++) for(var ix=0;ix<area.w;ix++) {
+        x=(y%2)==0?ix:area.w-1-ix;
+        pos=jCoord(area.origin.x+x*11,area.origin.y+y*11);key=afTileKey(pos);
+        var tileType=Number(jAbsTileType(jCoord(Math.floor(pos.x/11),Math.floor(pos.y/11))));
+        if(tileType<0)afFail("TILE_UNLOADED","Part of the selected field is not loaded; move closer or select a smaller field.");
+        occ=afOccupants(world,pos);
+        var crop=null;for(var i=0;i<occ.length;i++)if(occ[i].name==profile.name)crop=occ[i];
+        if(crop && job.mode!="plant" && profile.harvestable && afContains(profile.stages,crop.stage)) {
+            rows.push({key:key,pos:pos,id:crop.id,stage:crop.stage,state:"harvest",attempted:false});mature++;
+        } else if(occ.length==0 && (job.mode=="plant"||job.fillGaps)) {
+            if(tileType==AF_CFG.plowed){rows.push({key:key,pos:pos,state:"gap",attempted:false});gaps++;}
+        } else if(occ.length) ignored++;
+    }
+    for(var k=0;k<rows.length;k++)by[rows[k].key]=rows[k];
+    job.rows=rows;job.byTile=by;job.initial={mature:mature,gaps:gaps,ignored:ignored};
+}
+function afReadGob(id) {
+    var g=jGob(id);if(!afAlive(g))return null;
+    try{return {id:id,name:String(g.name()),pos:afCopyCoord(g.position()),stage:Number(g.blob(0))};}
+    catch(e){if(!afAlive(g))return null;throw e;}
+}
+function afCheckStamina(job) {
+    if(afHas("jGetStamina") && Number(jGetStamina())<AF_CFG.minStamina)
+        afFail("LOW_STAMINA","Stamina is below "+AF_CFG.minStamina+"%. Recover or drink manually, then Resume.");
+}
+function afHarvestOne(job,row) {
+    afCheckpoint(job);afCheckStamina(job);
+    afObserveHarvestRow(job,row);
+    var g=afReadGob(row.id);
+    if(!g || g.name!=job.profile.name || !afSamePos(afCenter(g.pos),row.pos) || !afContains(job.profile.stages,g.stage)) {
+        row.state="skipped";row.note="Original crop missing, moved or no longer eligible before action.";job.stats.skipped++;return;
+    }
+    afApproach(job,row.pos);afClearCursor(job);
+    if(!afCapacity(job))afFail("CAPACITY_CHANGED","Inventory space changed before harvesting. Resume to rescan.");
+    var before=afCapture(job);
+    jSendAction("harvest");
+    if(!afWait(job,function(){return jIsCursor("harvest");},AF_CFG.cursorMs))afFail("HARVEST_CURSOR","Harvest action did not activate.");
+    afActionBoundary(job);
+    // Revalidate immediately before sending the action, not just at batch start.
+    g=afReadGob(row.id);
+    if(!g || g.name!=job.profile.name || !afSamePos(afCenter(g.pos),row.pos) || !afContains(job.profile.stages,g.stage)) {
+        row.state="skipped";row.note="Crop changed immediately before the harvest request.";job.stats.skipped++;return;
+    }
+    // An API failure after this line must not erase the replacement obligation.
+    row.attempted=true;row.stage=g.stage;row.state="harvest-pending";
+    jDoClick(row.id,1,0);
+    var end=afNow()+AF_CFG.actionMs,changedAt=0,lastSig="",after=null,delta=null,transition=false,settled=false;
+    while(afNow()<end) {
+        afPoll(job);
+        g=afReadGob(row.id);
+        transition=!g || g.stage!=row.stage || g.name!=job.profile.name;
+        after=afCapture(job);delta=afHarvestDelta(before,after);
+        if(after.signature!=lastSig){lastSig=after.signature;changedAt=afNow();}
+        if(transition && delta.changed && !jHaveProgress() && afNow()-changedAt>=AF_CFG.settleMs){settled=true;break;}
+        if(jSleep(AF_CFG.poll)===false){job.stop=true;break;}
+    }
+    var local=afDistance(jMyCoords(),row.pos)<=33 && Number(jAbsTileType(jCoord(Math.floor(row.pos.x/11),Math.floor(row.pos.y/11))))>=0;
+    if(!transition) {
+        afFail("HARVEST_UNCONFIRMED","No result was confirmed at "+row.key+". Inspect the action/equipment, then Resume. In-flight work is checked before any retry.");
+    }
+    // A vanished target after our click remains an obligation even without loot proof.
+    var existing=afOccupants(afWorld(),row.pos),same=false;
+    for(var i=0;i<existing.length;i++)if(existing[i].name==job.profile.name)same=true;
+    row.state=job.mode=="harvest" ? "harvested" : (same?"retained":"replant");
+    if(!local || !delta || !delta.changed || jHaveProgress() || !settled) {
+        row.note="Harvest world transition observed; item result not confirmed.";
+        job.stats.uncertain++;
+        afFail("HARVEST_RESULT_UNCERTAIN","Inspect tile "+row.key+". It will NOT be harvested again; any missing replacement stays recorded. Resume acknowledges inspection.");
+    }
+    for(i=0;i<delta.added.length;i++)afOwn(delta.added[i],true);
+    job.stats.harvested++;job.batchHarvest++;job.generation++;
+    if(delta.added.length>job.outputLimit || delta.maxW>job.outputW || delta.maxH>job.outputH) {
+        job.outputLimit=Math.max(job.outputLimit,delta.added.length);
+        job.outputW=Math.max(job.outputW,delta.maxW);job.outputH=Math.max(job.outputH,delta.maxH);
+        afFail("YIELD_LIMIT_EXCEEDED","Observed output exceeded the planning limit. Limits were raised; inspect inventory/ground for overflow before Resume.");
+    }
+    afSetStatus(job,"Harvested tile "+row.key);
+}
+function afReconcileHarvest(job,row) {
+    // Used only after an interrupted/unconfirmed request, never to skip an obligation.
+    afObserveHarvestRow(job,row);
+    if(!afWait(job,function(){return !jHaveProgress();},AF_CFG.actionMs))
+        afFail("HARVEST_STILL_RUNNING","An action is still running. Wait for it to finish before Resume; no duplicate harvest was sent.");
+    var last="",stableAt=afNow();
+    if(!afWait(job,function(){
+        var g=afReadGob(row.id),sig=g ? g.name+"|"+g.stage+"|"+afTileKey(g.pos) : "absent";
+        if(sig!=last){last=sig;stableAt=afNow();}
+        return !jHaveProgress() && afNow()-stableAt>=AF_CFG.settleMs;
+    },AF_CFG.ioMs))afFail("HARVEST_STILL_CHANGING","The interrupted harvest is not stable yet. Inspect it before Resume.");
+    var current=afReadGob(row.id);
+    if(current && current.name==job.profile.name && afSamePos(afCenter(current.pos),row.pos) && current.stage==row.stage) {
+        row.state="harvest";row.attempted=false;
+        afLog("Tile "+row.key+": original crop unchanged after inspection; an explicitly resumed run may retry it.");
+        return;
+    }
+    var occupants=afOccupants(afWorld(),row.pos),same=false;
+    for(var i=0;i<occupants.length;i++)if(occupants[i].name==job.profile.name)same=true;
+    row.state=job.mode=="harvest"?"harvested":(same?"retained":"replant");
+    row.note="Interrupted harvest reconciled; result remains unconfirmed. Newly ambiguous items are protected.";
+    job.stats.uncertain++;
+    afLog("Tile "+row.key+": "+row.state+"; replacement obligation preserved after interruption.");
+}
+function afInspectPlantTile(job,row) {
+    afApproach(job,row.pos);
+    var state=afTileState(job,row);
+    for(var i=0;i<state.occupants.length;i++)if(state.occupants[i].name==job.profile.name) {
+        row.state="externally-filled";job.stats.externallyFilled++;return null;
+    }
+    return state;
+}
+function afObserveHarvestRow(job,row) {
+    // Absence in a distant/unloaded object cache is not evidence of removal.
+    afApproach(job,row.pos);
+    var tile=jCoord(Math.floor(row.pos.x/11),Math.floor(row.pos.y/11));
+    if(!afWait(job,function(){return Number(jAbsTileType(tile))>=0;},AF_CFG.ioMs))
+        afFail("TILE_UNLOADED","The target tile is not loaded after approach.");
+    if(!afReadGob(row.id))afWait(job,function(){return afReadGob(row.id)!=null;},AF_CFG.settleMs);
+}
+function afPlantOne(job,row) {
+    afCheckpoint(job);afCheckStamina(job);
+    var state=afInspectPlantTile(job,row);
+    if(!state)return;
+    if(state.occupants.length)afFail("TILE_OCCUPIED","Tile "+row.key+" is occupied; no seed was used.");
+    afWalk(job,row.pos,1);afClearCursor(job);
+    state=afTileState(job,row);var occ=state.occupants;
+    for(var i=0;i<occ.length;i++) if(occ[i].name==job.profile.name) {
+        row.state="externally-filled";job.stats.externallyFilled++;return;
+    }
+    if(occ.length) afFail("TILE_OCCUPIED","Tile "+row.key+" is occupied by "+occ[0].name+". No seed was used.");
+    if(state.type!=AF_CFG.plowed)afFail("NEEDS_PLOWING","Tile "+row.key+" needs plowed soil. Prepare it manually, then Resume.");
+    var seeds=afSeedList(afCapture(job).items,job.profile);
+    if(!seeds.length)afFail("NO_SEEDS","No accepted planting item is available for "+job.profile.label+".");
+    afTake(job,seeds[0]);
+    afActionBoundary(job);
+    // World can change while the take request is in flight.
+    state=afTileState(job,row);
+    if(state.type!=AF_CFG.plowed || state.occupants.length) {
+        if(!afRecover(job))afFail("RECOVERY_FAILED","Tile changed; the seed remains held. Return it manually.");
+        afFail("TILE_CHANGED","Tile "+row.key+" changed before planting. Resume to rescan.");
+    }
+    if(!afHeldMatches(job.hand))afFail("WRONG_HELD_ITEM","The held item does not match the selected planting material.");
+    row.attempted=true;
+    jAbsInteractClick(row.pos,0);
+    var confirmed=afWait(job,function(){
+        var objects=afOccupants(afWorld(),row.pos);
+        for(var k=0;k<objects.length;k++)if(objects[k].name==job.profile.name)return true;
+        return false;
+    },AF_CFG.actionMs);
+    if(confirmed) {
+        row.state="planted";job.stats.planted++;
+        // Some forks keep a stack remainder on the cursor. Return it, never drop it.
+        if(jIsDragging()) {
+            if(!afRecover(job))afFail("RECOVERY_FAILED","Planting succeeded, but the remaining item is still held. Put it away before Resume.");
+        }else job.hand=null;
+        afSetStatus(job,"Planted tile "+row.key);return;
+    }
+    if(!afRecover(job))afFail("RECOVERY_FAILED","Planting was not verified and an item remains held. Put it away before Resume.");
+    afFail("PLANT_UNCONFIRMED","No "+job.profile.label+" appeared at "+row.key+". Resume rescans the tile before considering another seed.");
+}
+
+/* ------------------- fixed-site disposal / seed depot ---------------- */
+function afPlantReserve(job,forFinal) {
+    var n=afRows(job,"replant").length+afRows(job,"harvest-pending").length;
+    if(forFinal)n+=afRows(job,"gap").length;
+    return Math.max(1,n);
+}
+function afDiscardOne(job,item) {
+    afCheckpoint(job);
+    if(!afSourceLive(item.source)) {
+        afLog("Discard skipped: the source identity changed. Its newly visible contents stay protected.");
+        return false;
+    }
+    afWalk(job,job.dropPoint,1);
+    afActionBoundary(job);
+    if(!afSourceLive(item.source))return false;
+    if(jIsMoving() || !afSamePos(afCenter(jMyCoords()),job.dropPoint))
+        afFail("DROP_LOCATION","Not stationary on the selected drop tile. Nothing was discarded.");
+    var fresh=afAt(item.source,item.slot);
+    if(!fresh || fresh.sig!=item.sig || !fresh.owned) return false;
+    if(afPlantable(job.profile,fresh)) {
+        var seeds=afSeedList(afCapture(job).items,job.profile);
+        var keep=afReserveMap(seeds,afPlantReserve(job,afRows(job,"harvest").length==0));
+        if(keep[fresh.key] || fresh.q===null || fresh.number>1)return false;
+    }
+    var before=afGrid(fresh.source).free;
+    fresh.ref.drop(); // No dropSuchAll(): each destructive request is checked.
+    var ok=afWait(job,function(){
+        if(!afSourceLive(fresh.source))return false;
+        return afAt(fresh.source,fresh.slot)==null && afGrid(fresh.source).free>=before+fresh.w*fresh.h;
+    },AF_CFG.ioMs);
+    if(!ok)afFail("DROP_UNCONFIRMED","Discard was not confirmed. No further drops will be sent until Resume.");
+    job.stats.dropped++;afSetStatus(job,"Discarded one item at the fixed drop site.");return true;
+}
+function afCull(job) {
+    if(!job.cullTask) {
+        if(job.culledGeneration==job.generation)return;
+        var plan=afCullPlan(afCapture(job).items,job.profile,afPlantReserve(job,afRows(job,"harvest").length==0));
+        job.cullTask={items:plan.other.concat(plan.seeds),index:0,generation:job.generation};
+        afLog("Batch disposal: "+plan.other.length+" run-acquired byproducts and "+plan.seeds.length+
+            " planting items (half target "+plan.requested+"; replant stock protected). All requests use the selected drop tile.");
+    }
+    while(job.cullTask.index<job.cullTask.items.length) {
+        afDiscardOne(job,job.cullTask.items[job.cullTask.index]);
+        job.cullTask.index++;
+    }
+    job.culledGeneration=job.cullTask.generation;job.cullTask=null;
+}
+function afValidateCaption(caption) {
+    caption=String(caption).replace(/^\s+|\s+$/g,"");
+    if(!caption || caption.length>45 || /[\r\n]/.test(caption))afFail("CONTAINER_TITLE","Enter the exact container window title.");
+    if(caption==AF_CFG.inventoryCaption || caption==AF_CFG.bagCaption || caption.indexOf("Area Farmer")===0)
+        afFail("CONTAINER_TITLE","The depot must be a world container, not the player inventory or a seedbag window.");
+    return caption;
+}
+function afOpenDepot(job) {
+    var d=job.depot;if(!d)afFail("NO_DEPOT","No seed-storage container was selected.");
+    afCheckpoint(job);afApproach(job,d.pos);afClearCursor(job);
+    var gob=jGob(d.id);
+    if(!afAlive(gob))afFail("DEPOT_MISSING","The selected container is not visible. No other container will be substituted.");
+    if(!afSamePos(gob.position(),d.pos))afFail("DEPOT_MOVED","The selected container moved. Restart to select its new position.");
+    if(afSourceLive(d.source)) {
+        var allLive=true;
+        for(var b=0;b<d.bags.length;b++)if(!afSourceLive(d.bags[b]))allLive=false;
+        if(allLive)return;
+        afCloseDepot(job);
+    }
+    afCloseWindows(job,d.caption);
+    jDropLastWindow();jDoClick(d.id,3,0);
+    var w=afNewWindow(job,d.caption),inv=null;
+    if(!afWait(job,function(){inv=afFirstInventory(w);return inv!=null;},AF_CFG.ioMs))
+        afFail("DEPOT_LAYOUT","The selected container must expose exactly one ordinary grid inventory.");
+    d.window=w;d.source=afSource("selected-depot","depot",inv,w);d.bags=[];
+    var a=afRead(d.source);
+    if(job.useBags) for(var i=0;i<a.length;i++)if(afIsBag(a[i]))
+        d.bags.push(afBindBag(job,a[i],"depot-bag","depot-bag-"+(++job.sourceSerial)));
+}
+function afCloseDepot(job) {
+    if(!job.depot)return;
+    var d=job.depot;
+    if(d.bags)for(var i=0;i<d.bags.length;i++)try{if(afAlive(d.bags[i].win))d.bags[i].win.close();}catch(e){}
+    try{if(afAlive(d.window))d.window.close();}catch(e2){}
+    d.source=null;d.window=null;d.bags=[];
+}
+function afStore(job) {
+    var remainingHarvest=afRows(job,"harvest").length;
+    var reserve=afPlantReserve(job,remainingHarvest==0);
+    var plan=afStorePlan(afCapture(job).items,job.profile,reserve,job.storeByproducts);
+    if(!plan.length){afCloseDepot(job);return;}
+    afOpenDepot(job);
+    for(var i=0;i<plan.length;i++) {
+        afCheckpoint(job);
+        var fresh=afAt(plan[i].source,plan[i].slot);
+        if(!fresh || !fresh.owned || fresh.sig!=plan[i].sig)continue;
+        var dests=[],d=job.depot;
+        if(afContains(job.profile.pack,fresh.res))dests=dests.concat(d.bags);
+        dests.push(d.source);
+        var moved=false;
+        for(var k=0;k<dests.length;k++) {
+            if(!afSourceLive(dests[k]))afFail("DEPOT_CLOSED","Storage closed during transfer. Resume will reopen the selected container.");
+            if(dests[k].reject[fresh.res] || !afFindSlot(afGrid(dests[k]),fresh.w,fresh.h,null))continue;
+            if(afMoveItem(job,fresh,dests[k])){moved=true;break;}
+            dests[k].reject[fresh.res]=true;
+            fresh=afAt(plan[i].source,plan[i].slot);
+            if(!fresh)afFail("STORE_RESCAN","The recovered item changed position. Resume to rescan.");
+        }
+        if(!moved)afFail("DEPOT_FULL_OR_REJECTED","The selected container/bags cannot accept "+fresh.res+
+            ". Free space there, or fix access, then Resume. Storage mode never throws.");
+        job.stats.stored++;afSetStatus(job,"Stored one surplus item in the selected container.");
+    }
+    afCloseDepot(job);
+}
+
+/* --------------------- persistent field scheduler ------------------- */
+function afNewJob() {
+    return {mode:null,profile:null,area:null,rows:[],byTile:{},player:null,bags:[],sourceSerial:0,
+        useBags:true,fillGaps:false,storeByproducts:false,outputW:1,outputH:1,outputLimit:6,
+        spareCells:AF_CFG.spareCells,stop:false,pause:false,resume:false,plantNow:false,
+        hand:null,panel:null,status:"Setup",phase:"harvest",batchHarvest:0,generation:0,
+        culledGeneration:-1,cullTask:null,flushReason:"",depot:null,dropPoint:null,
+        stats:{harvested:0,planted:0,dropped:0,stored:0,transferred:0,skipped:0,
+            externallyFilled:0,uncertain:0,batches:0},started:afNow()};
+}
+function afStartFlush(job,reason) {
+    job.flushReason=reason;
+    if(job.batchHarvest>0)job.stats.batches++;
+    job.phase=job.mode=="throw"?"cull":"plant";
+    job.plantNow=false;
+    afSetStatus(job,"Batch boundary: "+reason+". Choosing the best carried planting material.");
+}
+function afStep(job) {
+    afCheckpoint(job);afEnsureSources(job);
+    if(jIsDragging())afFail("HAND_OCCUPIED","Put the held item in an inventory before Resume.");
+    var pending=afRows(job,"harvest-pending");
+    if(pending.length){afReconcileHarvest(job,pending[0]);return false;}
+    var harvest=afRows(job,"harvest"),owed=afRows(job,"replant"),gaps=afRows(job,"gap"),seeds;
+    if(job.phase=="harvest") {
+        if(!harvest.length){afStartFlush(job,"field scan finished");return false;}
+        // Observe locally before distinguishing a stale target from an unloaded gob.
+        afObserveHarvestRow(job,harvest[0]);
+        // Disappeared targets must not be blocked behind an inventory shortage.
+        var g=afReadGob(harvest[0].id);
+        if(!g || g.name!=job.profile.name || !afContains(job.profile.stages,g.stage)) {
+            harvest[0].state="skipped";harvest[0].note="Original crop no longer eligible.";
+            job.stats.skipped++;return false;
+        }
+        afPackBags(job);
+        if(job.plantNow && job.mode!="harvest") {
+            if(owed.length || job.batchHarvest>0){afStartFlush(job,"Plant now requested");return false;}
+            job.plantNow=false;
+        }
+        if(job.profile.supplied && job.mode!="harvest") {
+            seeds=afSeedList(afCapture(job).items,job.profile);
+            if(seeds.length<=owed.length) {
+                if(owed.length){afStartFlush(job,"supplied seed reserve reached");return false;}
+                afFail("SUPPLIED_SEEDS_REQUIRED","Combined grape mode requires a carried grape seed BEFORE the next harvest. Add seeds and Resume, or use Harvest mode.");
+            }
+        }
+        if(afCapacity(job)) {
+            afSetStatus(job,"Harvesting: filling usable carried storage first.");
+            afHarvestOne(job,harvest[0]);return false;
+        }
+        if(job.mode=="harvest")afFail("CARRIED_STORAGE_FULL","No room for the next harvest plus its reserve. Unload inventory/bags, then Resume, or Stop to finish here.");
+        if(job.batchHarvest>0 || owed.length){afStartFlush(job,"carried storage limit reached");return false;}
+        // An explicitly requested old gap may unblock a completely full starting
+        // inventory. This is the only exception to deferring old gaps. Prepared
+        // grape seeds are not spent on gaps ahead of their harvest reserve.
+        if(job.fillGaps && gaps.length && !job.profile.supplied) {
+            seeds=afSeedList(afCapture(job).items,job.profile);
+            if(seeds.length) {
+                afSetStatus(job,"No harvest capacity: planting an authorized old gap to free storage.");
+                afPlantOne(job,gaps[0]);return false;
+            }
+        }
+        afFail("NO_SAFE_CAPACITY","No room for the next harvest and no replants can free space. Unload byproducts/protected stock, then Resume. No repeated half-cull will run.");
+    }
+    if(job.phase=="cull") {afCull(job);job.phase="plant";return false;}
+    if(job.phase=="plant") {
+        if(job.mode=="harvest") {job.phase="finish";return false;}
+        owed=afRows(job,"replant");harvest=afRows(job,"harvest");gaps=afRows(job,"gap");
+        var target=owed.length?owed[0]:((harvest.length==0 && gaps.length)?gaps[0]:null);
+        if(target) {
+            seeds=afSeedList(afCapture(job).items,job.profile);
+            if(!seeds.length) {
+                if(!afInspectPlantTile(job,target))return false;
+                // Old gaps never pre-empt remaining crops; genuine replants remain recorded.
+                if(harvest.length && !job.profile.supplied) {
+                    afPackBags(job);
+                    if(afCapacity(job)){job.phase="harvest";job.batchHarvest=0;return false;}
+                }
+                afFail("NO_PLANTING_MATERIAL",owed.length?
+                    owed.length+" replants are still owed. Add accepted seeds/plants, then Resume.":
+                    gaps.length+" requested old gaps remain. Add planting material and Resume, or Stop for a partial result.");
+            }
+            afSetStatus(job,(owed.length?"Replanting harvested tiles":"Filling requested old gaps")+"; best quality first.");
+            afPlantOne(job,target);return false;
+        }
+        if(job.mode=="store"){job.phase="store";return false;}
+        job.phase=harvest.length?"next-batch":"finish";return false;
+    }
+    if(job.phase=="store") {
+        afStore(job);
+        job.phase=afRows(job,"harvest").length?"next-batch":"finish";return false;
+    }
+    if(job.phase=="next-batch") {
+        job.batchHarvest=0;job.phase="harvest";
+        // No stale capacity-error flag: capacity is recalculated on the next step.
+        return false;
+    }
+    if(job.phase=="finish")return true;
+    afFail("STATE","Unknown scheduler phase: "+job.phase);
+}
+function afSummary(job,outcome) {
+    var left=afRows(job,"harvest").length,replant=afRows(job,"replant").length,gaps=afRows(job,"gap").length,
+        pending=afRows(job,"harvest-pending").length;
+    if(outcome=="COMPLETE" && (left||replant||gaps||pending))outcome="INCOMPLETE";
+    if(outcome=="COMPLETE" && (job.stats.skipped||job.stats.uncertain))outcome="COMPLETE WITH EXCEPTIONS";
+    afLog(outcome+" | confirmed harvested "+job.stats.harvested+", confirmed planted "+job.stats.planted+
+        ", dropped "+job.stats.dropped+", stored "+job.stats.stored+", batches "+job.stats.batches+
+        ", externally filled "+job.stats.externallyFilled+", skipped "+job.stats.skipped+", uncertain "+job.stats.uncertain+".");
+    afLog("Outstanding: harvest "+left+", replants "+replant+", requested gaps "+gaps+", unconfirmed in-flight harvests "+pending+".");
+    for(var i=0;i<job.rows.length;i++) {
+        var row=job.rows[i];
+        if(row.state=="replant"||row.state=="gap"||row.state=="harvest-pending"||row.note)
+            afLog("Tile "+row.key+": "+row.state+(row.note?" - "+row.note:""));
+    }
+    return outcome;
+}
+function afFinalDialog(job,outcome) {
+    var lines=["Verified harvests: "+job.stats.harvested+" | verified plants: "+job.stats.planted,
+        "Discarded: "+job.stats.dropped+" | stored: "+job.stats.stored+" | harvest batches: "+job.stats.batches,
+        "Outstanding replants: "+afRows(job,"replant").length+" | requested gaps: "+afRows(job,"gap").length,
+        "Harvests still planned: "+afRows(job,"harvest").length+" | in-flight / unconfirmed: "+afRows(job,"harvest-pending").length,
+        "Skipped: "+job.stats.skipped+" | uncertain results: "+job.stats.uncertain,
+        "See Messages for exact unfinished tile coordinates and warnings.",
+        "This job is now stopped. A new run starts a new field plan."];
+    if(jIsDragging())lines.push("IMPORTANT: return the held item manually; it was not ground-dropped.");
+    afMenu("Area Farmer 2 - "+outcome,lines,["Close"]);
+}
+function afDiagnostics(job) {
+    var version="not exposed";
+    try{if(afHas("jGetVersion"))version=String(jGetVersion());}catch(e){}
+    afLog("Diagnostics | script "+AF_VERSION+" | client "+version);
+    if(!job)return;
+    afLog("Mode "+job.mode+" | phase "+job.phase+" | crop "+(job.profile?job.profile.label:"unset")+
+        " | output limit "+job.outputLimit+" x "+job.outputW+"x"+job.outputH+" | spare "+job.spareCells);
+    if(job.profile)afLog("Accepted planting resources: "+job.profile.seeds.join(", "));
+    var src=afCarriedSources(job);
+    for(var i=0;i<src.length;i++) {
+        if(!afSourceLive(src[i])){afLog("Source unavailable: "+(src[i]?src[i].id:"player"));continue;}
+        try{
+            var items=afRead(src[i]),groups={};
+            for(var j=0;j<items.length;j++) {
+                var key=items[j].res+" "+items[j].w+"x"+items[j].h+" number="+items[j].number+
+                    " "+(items[j].owned?"run-acquired":"protected");
+                groups[key]=(groups[key]||0)+1;
+            }
+            afLog(src[i].id+" | free cells "+afGrid(src[i]).free);
+            for(var k in groups)afLog("  "+groups[k]+" x "+k);
+        }catch(e2){afLog("Source read failed: "+e2);}
+    }
+}
+
+/* ---------------------------- setup --------------------------------- */
+function afCapabilities() {
+    var names=["jCoord","jSleep","jToConsole","jGetWindow","jGetWindows","jToggleInventory",
+        "jGetObjects","jGetMyID","jGob","jAbsTileType","jMyCoords","jIsMoving","jIsPathFree",
+        "jAbsClick","jSendAction","jIsCursor","jDoClick","jAbsInteractClick","jHaveProgress",
+        "jIsDragging","jGetDraggingItem","jDropLastWindow","jWaitNewWindow","jAreaSelector",
+        "jGUIWindow","jGUILabel","jGUIButton","jGUIEntry","jGUICbox"],missing=[];
+    for(var i=0;i<names.length;i++)if(!afHas(names[i]))missing.push(names[i]);
+    if(missing.length)afFail("CLIENT_API","Missing native functions: "+missing.join(", ")+". Run Farmer-Diagnostics; a client upload is not required.");
+}
+function afChooseProfile(allowAuto,detected) {
+    var p=afProfiles(),labels=[],i;
+    if(allowAuto)labels.push("Detect from field");
+    for(i=0;i<p.length;i++)labels.push(p[i].label);
+    labels.push("Cancel");
+    var msg=["Choose one crop. Other crops will be left alone.","Pumpkins: planting only. Grapes: no processing."];
+    if(detected)msg.push("Detected: "+detected);
+    var b=afMenu("Area Farmer 2 - Crop",msg,labels);
+    if(!b)return null;
+    if(b=="Detect from field")return "auto";
+    for(i=0;i<p.length;i++)if(b==p[i].label)return p[i];
+    return null;
+}
+function afSelectArea() {
+    var s=jAreaSelector(jCoord(250,180));
+    if(!s || s.length<4 || s[0]==null || s[3]==null)return null;
+    var w=Number(s[3].x),h=Number(s[3].y),origin=afCenter(s[0]);
+    if(w<1||h<1||w*h>AF_CFG.maxFieldTiles)afFail("AREA_SIZE","Select between 1 and "+AF_CFG.maxFieldTiles+" tiles.");
+    var a={origin:origin,w:w,h:h};
+    var corners=[origin,jCoord(origin.x+(w-1)*11,origin.y),jCoord(origin.x,origin.y+(h-1)*11),jCoord(origin.x+(w-1)*11,origin.y+(h-1)*11)];
+    for(var i=0;i<corners.length;i++)if(afDistance(jMyCoords(),corners[i])>AF_CFG.maxInitialDistance)
+        afFail("AREA_TOO_FAR","Choose a smaller nearby field so all selected tiles are observed at setup.");
+    return a;
+}
+function afDetectProfile(area,world) {
+    var profiles=afProfiles(),matches=[],i,j,count;
+    for(i=0;i<profiles.length;i++) {
+        count=0;for(j=0;j<world.length;j++)if(afInArea(world[j].pos,area)&&world[j].name==profiles[i].name)count++;
+        if(count)matches.push({profile:profiles[i],count:count});
+    }
+    if(matches.length==1)return matches[0].profile;
+    var text=matches.length?"": "none (empty or unrecognized field)";
+    for(i=0;i<matches.length;i++)text+=(i?", ":"")+matches[i].profile.label+" "+matches[i].count;
+    return afChooseProfile(false,text);
+}
+function afSettings(job) {
+    var ui=afUI("Area Farmer 2 - Settings",640,392);
+    try {
+        afLabel(ui,8,8,job.profile.label+" | storage-first batches | best carried quality first");
+        var bags=afBox(ui,8,35,"Use carried seedbags (reopen bag windows to identify their owners)",true);
+        var gaps=afBox(ui,8,62,"Fill pre-existing gaps (normally after harvests; may unblock full storage)",job.mode=="plant");
+        afLabel(ui,8,99,"Planning limit: maximum output items from ONE harvest:");
+        var n=afEntry(ui,445,95,70,job.profile.outputLimit);
+        afLabel(ui,8,129,"Largest output item footprint: width / height (grid cells)");
+        var w=afEntry(ui,445,125,70,1),h=afEntry(ui,526,125,70,1);
+        afLabel(ui,8,159,"Extra inventory cells to keep beyond the output allowance:");
+        var spare=afEntry(ui,445,155,70,1);
+        afLabel(ui,8,188,"These are editable safety assumptions, not measured server yield limits.");
+        var title=null,byproducts=null;
+        if(job.mode=="store") {
+            afLabel(ui,8,219,"Exact storage window title (for example Chest or Cupboard):");
+            title=afEntry(ui,445,215,150,"Chest");
+            byproducts=afBox(ui,8,249,"Also store run-acquired byproducts in the same container",false);
+            afLabel(ui,8,280,"Store mode: deposit-only, no throwing; initial belongings stay protected.");
+        } else if(job.mode=="throw") {
+            afLabel(ui,8,219,"Throw mode: half the run-acquired seeds/plants + all acquired byproducts.");
+            afLabel(ui,8,246,"Initial belongings, unknown seed quality, and owed replants are protected.");
+            afLabel(ui,8,273,"All discard requests are issued while standing on one chosen tile.");
+        } else {
+            afLabel(ui,8,219,"No automatic discarding, eating, drinking, processing or plowing.");
+            afLabel(ui,8,246,"Full storage or missing planting material pauses the job for attention.");
+        }
+        var error=afLabel(ui,8,305,"");
+        afButton(ui,8,345,300,"Continue");afButton(ui,322,345,300,"Cancel");
+        while(true) {
+            var b=String(ui.win.waitButtonClick(300000));
+            if(!b||b=="Cancel")return false;
+            if(b!="Continue")continue;
+            try {
+                job.outputLimit=afInt(n.getText(),1,100,"Output item limit");
+                job.outputW=afInt(w.getText(),1,10,"Output width");job.outputH=afInt(h.getText(),1,10,"Output height");
+                job.spareCells=afInt(spare.getText(),1,20,"Spare cells");
+                job.useBags=bags.isChecked();job.fillGaps=job.mode=="plant" || gaps.isChecked();
+                if(title)job.containerCaption=afValidateCaption(title.getText());
+                if(byproducts)job.storeByproducts=byproducts.isChecked();
+                return true;
+            }catch(e){error.setText(String(e.message||e));}
+        }
+    }finally{afDestroyUI(ui);}
+}
+function afChooseDropSite(job) {
+    while(true) {
+        afLog("Choose a ONE-TILE drop site. A nearby clear tile outside the field is recommended.");
+        var a=afSelectArea();if(!a)return false;
+        var problem=(a.w!=1||a.h!=1)?"The drop site must be exactly one tile.":
+            (afInArea(a.origin,job.area)?"The drop tile must be outside the selected field.":null);
+        if(!problem){job.dropPoint=a.origin;return true;}
+        if(afMenu("Choose another drop site",[problem,"The selected field and other settings are preserved."],["Select again","Cancel"])!="Select again")return false;
+    }
+}
+function afSelectDepot(job) {
+    if(!afHas("jSelectObject"))afFail("CLIENT_API","This client does not expose jSelectObject for container selection.");
+    afLog("Select the ONE world container used for surplus seed storage. Close other windows of its title first.");
+    var g=jSelectObject("Select the seed-storage container (no processing equipment).");
+    if(!afAlive(g))return false;
+    var name=String(g.name());
+    if(name.indexOf("/plants/")>=0 || name.indexOf("borka")>=0 || name.indexOf("winepress")>=0 || name.indexOf("barrel")>=0)
+        afFail("DEPOT_TYPE","Select an ordinary grid-storage container, not a crop, character, barrel or press.");
+    job.depot={id:Number(g.getID()),pos:afCopyCoord(g.position()),name:name,caption:job.containerCaption,
+        source:null,window:null,bags:[]};
+    return true;
+}
+function afPreflight(job) {
+    afEnsurePlayer(job);afEnsureBags(job,true);
+    afBuildRows(job,afWorld());
+    var seedCount=afSeedList(afCapture(job).items,job.profile).length;
+    var lines=[job.profile.label+" | "+job.area.w+" x "+job.area.h+" tiles",
+        "Eligible harvests: "+job.initial.mature+" | requested old gaps: "+job.initial.gaps,
+        "Carried planting items: "+seedCount+" | carried seedbags: "+job.bags.length,
+        "Output allowance: "+job.outputLimit+" item(s), each at most "+job.outputW+"x"+job.outputH+"; spare cells "+job.spareCells,
+        "Initial items may be planted, but will never be discarded or deposited."];
+    if(job.mode=="throw")lines.push("DROP SITE: tile "+afTileKey(job.dropPoint)+". Server placement may scatter ground items.");
+    if(job.mode=="store") {
+        // Probe only the selected container before any crop is touched.
+        afOpenDepot(job);
+        var storageFree=afGrid(job.depot.source).free;
+        for(var i=0;i<job.depot.bags.length;i++)storageFree+=afGrid(job.depot.bags[i]).free;
+        lines.push("STORAGE: "+job.depot.caption+", object "+job.depot.id+", grid/bag free cells "+storageFree+".");
+        lines.push(job.storeByproducts?"Deposit surplus seeds AND byproducts; never throw.":"Deposit surplus seeds only; unload non-seed byproducts manually when needed.");
+        afCloseDepot(job);
+    }
+    if(job.profile.supplied)lines.push("Prepared seeds only. No grape or pumpkin processing is performed.");
+    if(job.mode!="plant"&&job.initial.mature==0)lines.push("No eligible mature crops were found; no waiting for crop growth.");
+    if(job.mode=="plant"&&seedCount==0)lines.push("NO PLANTING MATERIAL: Start will pause until you supply accepted seeds.");
+    lines.push("Use Pause before rearranging items. Resume rechecks state; Stop reports unfinished tiles.");
+    return afMenu("Area Farmer 2 - Review",lines,["Start","Cancel"])=="Start";
+}
+function afSetup(job) {
+    afCapabilities();
+    if(jIsDragging())afFail("HAND_OCCUPIED","Put the held item away before starting the farmer.");
+    var choices=["Harvest","Harvest and plant","Harvest, plant and throw","Harvest, plant and store","Plant","Exit"];
+    var selected=afMenu("Area Farmer 2",["Select the workflow. No processing or automatic equipment changes.","Storage-first: fill usable inventory + carried seedbags, then plant."],choices);
+    if(!selected)return false;
+    var modes=["harvest","combined","throw","store","plant"];
+    for(var i=0;i<modes.length;i++)if(selected==choices[i])job.mode=modes[i];
+    if(!job.mode)return false;
+    job.profile=afChooseProfile(true,null);if(!job.profile)return false;
+    afLog("Select the field rectangle.");job.area=afSelectArea();if(!job.area)return false;
+    if(job.profile=="auto")job.profile=afDetectProfile(job.area,afWorld());
+    if(!job.profile)return false;
+    if(!job.profile.harvestable && job.mode!="plant") {
+        if(afMenu("Pumpkins - planting only",["Pumpkins use prepared seeds; harvesting and processing are disabled.",
+            "Keep this field selection and switch to Plant mode?"],["Use Plant mode","Cancel"])!="Use Plant mode")return false;
+        job.mode="plant";
+    }
+    if(job.profile.label=="Carrot" && job.mode!="plant") {
+        var goal=afMenu("Carrot harvest goal",["Choose the desired raw growth stage(s).", "Roots = displayed stage 5; seeds = displayed stage 4."],["Roots","Seeds","Either eligible stage","Cancel"]);
+        if(!goal)return false;
+        job.profile.stages=goal=="Roots"?[4]:(goal=="Seeds"?[3]:[3,4]);
+        if(goal!="Roots")job.profile.outputLimit=6;
+    }
+    if(!afSettings(job))return false;
+    if(job.mode=="throw"&&!afChooseDropSite(job))return false;
+    if(job.mode=="store"&&!afSelectDepot(job))return false;
+    if(!afPreflight(job))return false;
+    job.phase=job.mode=="plant"?"plant":"harvest";
+    job.started=afNow();afPanel(job);afDiagnostics(job);return true;
+}
+function afMain() {
+    var job=afNewJob(),outcome="CANCELLED",started=false;
+    try {
+        if(!afSetup(job))return;
+        started=true;
+        while(!job.stop) {
+            try {
+                if(afStep(job)){outcome="COMPLETE";break;}
+            }catch(e) {
+                if(e.afCode=="CANCELLED" || job.stop){outcome="CANCELLED";break;}
+                // Expected live-state failures can be inspected and resumed; programming
+                // or API-contract failures stop rather than looping forever on a bug.
+                if(!e.afCode){outcome="FAILED";afLog("Unexpected error: "+e);afDiagnostics(job);break;}
+                try{afAttention(job,e.afCode,String(e.message||e));}
+                catch(stop){outcome=stop.afCode=="CANCELLED"?"CANCELLED":"FAILED";break;}
+            }
+        }
+    }catch(e2) {
+        outcome=e2.afCode=="CANCELLED"?"CANCELLED":"FAILED";
+        afLog((e2.afCode||"ERROR")+": "+String(e2.message||e2));
+        if(!started)afLog("Setup stopped before any farming action. Correct the issue and restart Area Farmer 2; there is no active job to Resume.");
+        if(afHas("jPrint"))jPrint("FARMER 2: "+e2);
+    }finally {
+        try {
+            if(job.hand && !afRecover(job))afLog("IMPORTANT: an item remains on the cursor. Return it manually. No recovery ground-drop was attempted.");
+        }catch(cleanupError){afLog("Recovery could not finish: "+cleanupError+". Inspect the cursor manually.");}
+        if(started){
+            afStopMotion(job);
+            try{outcome=afSummary(job,outcome);}catch(summaryError){afLog("Summary could not finish: "+summaryError);}
+        }
+        try{afCloseDepot(job);}catch(depotError){afLog("Close storage manually: "+depotError);}
+        afDestroyUI(job.panel);
+        if(started)try{afFinalDialog(job,outcome);}catch(dialogError){afLog("Final status: "+outcome+" (summary window unavailable).");}
+    }
+}
+// Test harnesses set AF_NO_MAIN. Normal client execution always starts the UI.
+if(typeof AF_NO_MAIN=="undefined" || !AF_NO_MAIN) afMain();

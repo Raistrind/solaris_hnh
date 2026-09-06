@@ -666,6 +666,9 @@ public class WorldMapWindow extends Window {
 				g.chcolor();
 				return;
 			}
+			/* Stored cave tiles are positioned from the confirmed surface tile at
+			 * which that cave was entered, not from volatile cave grid coordinates. */
+			MiniMap.drawRecordedCaves(g, tc, hsz);
 			WorldMapMarkerStore.Marker waypoint = markerStore.waypoint();
 			Coord player = playerTile();
 			Coord waypointTile = markerSessionTile(waypoint);

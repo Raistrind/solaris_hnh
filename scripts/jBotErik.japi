@@ -151,6 +151,10 @@ function selectInRect_mouse_all_multi(resname) {// [res, res2, res3][];
 function selectAreaInRect_mouse(title) {
 	jToConsole(title)
 	SelArea = jAreaSelector()
+	if (SelArea == null || SelArea.length < 4 || SelArea[2] == null || SelArea[3] == null) {
+		jToConsole("Area selection cancelled.");
+		return null;
+	}
 	jDrawGroundRect(SelArea[2], SelArea[3]);
 	area = SelArea[3]
 	offs = SelArea[2]

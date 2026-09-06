@@ -22,7 +22,10 @@ public class JSGUI {
 		}
 		
 		protected Widget wdg() {
-			Object wdg = local_widgets.get(wdgid);
+			Object wdg;
+			synchronized (local_widgets) {
+				wdg = local_widgets.get(wdgid);
+			}
 			if (wdg instanceof Widget) {
 				return (Widget) wdg;
 			} else
@@ -34,44 +37,63 @@ public class JSGUI {
 		}
 		
 		public void destroy() {
-			wdg().destroyAll();
-			local_widgets.remove(wdgid);
+			Widget widget = wdg();
+			if (widget == null)
+				return;
+			synchronized (widget.ui) {
+				widget.destroyAll();
+				synchronized (local_widgets) {
+					local_widgets.remove(wdgid);
+				}
+			}
+		}
+	}
+
+	private static int registerWidget(Widget widget) {
+		synchronized (local_widgets) {
+			local_index++;
+			local_widgets.put(local_index, widget);
+			return local_index;
 		}
 	}
 	
 	public static JSGUI_Window createWindow(Coord pos, Coord size, String caption) {
-		local_index++;
-		Window wnd = new Window(pos, size, UI.instance.root, caption);
-		local_widgets.put(local_index, wnd);
-		return new JSGUI_Window(local_index);	
+		synchronized (UI.instance) {
+			Window wnd = new Window(pos, size, UI.instance.root, caption);
+			return new JSGUI_Window(registerWidget(wnd));
+		}
 	}
 	
 	public static JSGUI_Button createButton(JSGUI_Widget parent, Coord pos, int width, String text) {
-		local_index++;
-		Button btn = new Button(pos, width, parent.wdg(), text);
-		local_widgets.put(local_index, btn);
-		return new JSGUI_Button(local_index);	
+		Widget parentWidget = parent.wdg();
+		synchronized (parentWidget.ui) {
+			Button btn = new Button(pos, width, parentWidget, text);
+			return new JSGUI_Button(registerWidget(btn));
+		}
 	}
 	
 	public static JSGUI_Label createLabel(JSGUI_Widget parent, Coord pos, String text) {
-		local_index++;
-		Label lbl = new Label(pos, parent.wdg(), text);
-		local_widgets.put(local_index, lbl);
-		return new JSGUI_Label(local_index);	
+		Widget parentWidget = parent.wdg();
+		synchronized (parentWidget.ui) {
+			Label lbl = new Label(pos, parentWidget, text);
+			return new JSGUI_Label(registerWidget(lbl));
+		}
 	}
 	
 	public static JSGUI_TextEntry createEntry(JSGUI_Widget parent, Coord pos, Coord size, String deftext) {
-		local_index++;
-		TextEntry entry = new TextEntry(pos, size, parent.wdg(), deftext);
-		local_widgets.put(local_index, entry);
-		return new JSGUI_TextEntry(local_index);
+		Widget parentWidget = parent.wdg();
+		synchronized (parentWidget.ui) {
+			TextEntry entry = new TextEntry(pos, size, parentWidget, deftext);
+			return new JSGUI_TextEntry(registerWidget(entry));
+		}
 	}
 	
 	public static JSGUI_CheckBox createBox(JSGUI_Widget parent, Coord pos, String text) {
-		local_index++;
-		CheckBox cbox = new CheckBox(pos, parent.wdg(), text);
-		local_widgets.put(local_index, cbox);
-		return new JSGUI_CheckBox(local_index);
+		Widget parentWidget = parent.wdg();
+		synchronized (parentWidget.ui) {
+			CheckBox cbox = new CheckBox(pos, parentWidget, text);
+			return new JSGUI_CheckBox(registerWidget(cbox));
+		}
 	}
 	
 	public static JSGUI_Widget unWrapGUI_Widget(Object obj) {

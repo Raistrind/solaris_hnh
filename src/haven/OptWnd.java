@@ -266,6 +266,31 @@ public class OptWnd extends Window {
 		interiorOverlayOpacity.check(interiorOpacityIndex);
 		interiorOverlayReady[0] = true;
 
+		(new CheckBox(new Coord(220, 410), tab,
+				"Show recorded caves on the surface map") {
+			public void changed(boolean val) {
+				Config.showRecordedCaveOverlay = val;
+				Config.saveOptions();
+			}
+		}).a = Config.showRecordedCaveOverlay;
+		new Label(new Coord(220, 435), tab, "Recorded-cave map opacity:");
+		final boolean[] caveOverlayReady = { false };
+		final RadioGroup caveOverlayOpacity = new RadioGroup(tab) {
+			public void changed(int btn, String lbl) {
+				if (caveOverlayReady[0]) {
+					Config.recordedCaveOverlayOpacity = new int[] { 64, 112, 160 }[btn];
+					Config.saveOptions();
+				}
+			}
+		};
+		caveOverlayOpacity.add("25%", new Coord(220, 460));
+		caveOverlayOpacity.add("45%", new Coord(300, 460));
+		caveOverlayOpacity.add("65%", new Coord(380, 460));
+		int caveOpacityIndex = (Config.recordedCaveOverlayOpacity >= 136) ? 2
+				: ((Config.recordedCaveOverlayOpacity >= 88) ? 1 : 0);
+		caveOverlayOpacity.check(caveOpacityIndex);
+		caveOverlayReady[0] = true;
+
 	}
 
 	{ /* SCALING TAB */

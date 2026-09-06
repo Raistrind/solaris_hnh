@@ -105,6 +105,8 @@ public class Config {
 	public static boolean autoSaveMinimaps;
 	public static boolean showInteriorWorldOverlay = true;
 	public static int interiorWorldOverlayOpacity = 96;
+	public static boolean showRecordedCaveOverlay = true;
+	public static int recordedCaveOverlayOpacity = 112;
 	public static boolean qualitySurvey = true, qualitySurveyForage = true,
 			qualitySurveySoil = true, qualitySurveyClay = true, qualitySurveyWater = true,
 			qualitySurveyFish = true,
@@ -550,6 +552,10 @@ public class Config {
 				"true").equals("true");
 		interiorWorldOverlayOpacity = Math.max(48, Math.min(192,
 				Utils.atoi(options.getProperty("interiorWorldOverlayOpacity", "96"))));
+		showRecordedCaveOverlay = options.getProperty("showRecordedCaveOverlay",
+				"true").equals("true");
+		recordedCaveOverlayOpacity = Math.max(48, Math.min(192,
+				Utils.atoi(options.getProperty("recordedCaveOverlayOpacity", "112"))));
 		qualitySurvey = options.getProperty("qualitySurvey", "true").equals("true");
 		qualitySurveyForage = options.getProperty("qualitySurveyForage", "true").equals("true");
 		qualitySurveySoil = options.getProperty("qualitySurveySoil", "true").equals("true");
@@ -762,6 +768,10 @@ public class Config {
 				showInteriorWorldOverlay ? "true" : "false");
 		options.setProperty("interiorWorldOverlayOpacity",
 				String.valueOf(interiorWorldOverlayOpacity));
+		options.setProperty("showRecordedCaveOverlay",
+				showRecordedCaveOverlay ? "true" : "false");
+		options.setProperty("recordedCaveOverlayOpacity",
+				String.valueOf(recordedCaveOverlayOpacity));
 		options.setProperty("qualitySurvey", qualitySurvey ? "true" : "false");
 		options.setProperty("qualitySurveyForage", qualitySurveyForage ? "true" : "false");
 		options.setProperty("qualitySurveySoil", qualitySurveySoil ? "true" : "false");
